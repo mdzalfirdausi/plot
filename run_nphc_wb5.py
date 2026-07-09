@@ -464,7 +464,7 @@ for k, u_k in enumerate(eval_grid):
             num_feas += 1
             break # Found the feasible operating point for this grid coordinate
             
-    # Log progress cleanly every 50 evaluations or whenever a point is found
+    # Log progress cleanly every 50 evaluations or whenever a point is found 
     if (k + 1) % 50 == 0 or num_feas > 0:
         elapsed_sec = time.time() - start_time
         rate = (k + 1) / elapsed_sec
