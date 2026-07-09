@@ -234,7 +234,7 @@ def parse_phcpy_real_roots(raw_solutions, var_names):
 # =============================================================================
 # EXECUTE FULL PRODUCTION SWEEP ACROSS ENTIRE GRID (SLURM ARRAY ENABLED)
 # =============================================================================
-
+ 
 # 1. Grab the SLURM Array ID. If running locally on your laptop, it defaults to Task 0 of 1.
 array_id = int(os.environ.get('SLURM_ARRAY_TASK_ID', 0))
 num_tasks = int(os.environ.get('SLURM_ARRAY_TASK_COUNT', 1))
