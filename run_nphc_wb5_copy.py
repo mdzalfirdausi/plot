@@ -232,16 +232,25 @@ def parse_phcpy_real_roots(raw_solutions, var_names):
     return real_roots
 
 # =============================================================================
-# EXECUTE FULL PRODUCTION SWEEP ACROSS ENTIRE GRID
+# EXECUTE FULL PRODUCTION SWEEP ACROSS ENTIRE GRID (SLURM ARRAY ENABLED)
 # =============================================================================
-total_points = len(candidate_controls)
-print(f"\nStarting Production NPHC Sweep across {total_points:,} coordinates...")
+
+# 1. Grab the SLURM Array ID. If running locally on your laptop, it defaults to Task 0 of 1.
+array_id = int(os.environ.get('SLURM_ARRAY_TASK_ID', 0))
+num_tasks = int(os.environ.get('SLURM_ARRAY_TASK_COUNT', 1))
+
+# 2. Split the 3,375 grid coordinates into equal chunks
+chunks = np.array_split(candidate_controls, num_tasks)
+eval_grid = chunks[array_id]  # This specific worker only processes its assigned chunk!
+total_points = len(eval_grid)
+
+print(f"\n[Worker {array_id}/{num_tasks-1}] Starting NPHC Sweep across {total_points:,} coordinates...")
 print(f"Time started: {time.strftime('%X')}\n")
 
 feasible_points = []
 start_time = time.time()
 
-for k, u_k in enumerate(candidate_controls):
+for k, u_k in enumerate(eval_grid):
     pols, var_names = build_phcpy_system_strings(u_k, bus_data, gen_data, Ybus, slack_bus, active_gens, control_names)
     raw_complex_solutions = solve(pols)
     real_roots = parse_phcpy_real_roots(raw_complex_solutions, var_names)
@@ -259,17 +268,16 @@ for k, u_k in enumerate(candidate_controls):
             num_feas += 1
             break 
             
-    if (k + 1) % 50 == 0 or num_feas > 0:
+    if (k + 1) % 10 == 0 or num_feas > 0:
         elapsed_sec = time.time() - start_time
         rate = (k + 1) / elapsed_sec
         est_rem_min = ((total_points - (k + 1)) / rate) / 60.0
-        print(f"  [Progress {(k+1):4d}/{total_points:,} | {(k+1)/total_points*100:5.1f}%] P_G5={u_k[0]:.2f} pu | Real Roots: {len(real_roots):2d} | Feasible Total: {len(feasible_points):3d} | ETA: {est_rem_min:.1f} min", flush=True)
+        print(f"  [Worker {array_id} | Progress {(k+1):3d}/{total_points:,}] P_G5={u_k[0]:.2f} pu | Real: {len(real_roots):2d} | Feas Total: {len(feasible_points):2d} | ETA: {est_rem_min:.1f} min", flush=True)
 
-print(f"\n✔ True NPHC Production Sweep Complete!")
-print(f"  Total Time Elapsed: {(time.time() - start_time)/60:.2f} minutes")
-print(f"  Strictly Feasible OPF Operating Points Found: {len(feasible_points):,}")
+print(f"\n✔ [Worker {array_id}] Sweep Complete! Found {len(feasible_points)} points.")
 
-output_filename = "wb5_feasible_points.pkl"
+# 3. Save to a UNIQUE filename so workers don't overwrite each other!
+output_filename = f"wb5_feasible_points_part_{array_id}.pkl"
 with open(output_filename, "wb") as f:
     pickle.dump(feasible_points, f)
-print(f"✔ Data successfully persisted to disk: '{output_filename}'")
+print(f"✔ Data saved to: '{output_filename}'")
