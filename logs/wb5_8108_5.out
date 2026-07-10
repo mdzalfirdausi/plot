@@ -1,0 +1,36 @@
+PHCv2.4.94 released 2026-04-16 works!
+Loading system data from WB5.m...
+Grid discretizaton complete: 3375 coordinates generated.
+
+[Worker 5/39] Starting NPHC Sweep across 85 coordinates...
+Time started: 21:48:56
+
+  [Worker 5 | Progress   1/85] P_G5=0.29 pu | Real:  2 | Feas Total:  1 | ETA: 1.1 min
+  [Worker 5 | Progress   2/85] P_G5=0.29 pu | Real:  2 | Feas Total:  2 | ETA: 1.0 min
+  [Worker 5 | Progress   3/85] P_G5=0.29 pu | Real:  2 | Feas Total:  3 | ETA: 1.0 min
+  [Worker 5 | Progress   4/85] P_G5=0.29 pu | Real:  2 | Feas Total:  4 | ETA: 1.0 min
+  [Worker 5 | Progress   5/85] P_G5=0.29 pu | Real:  2 | Feas Total:  5 | ETA: 1.0 min
+  [Worker 5 | Progress   6/85] P_G5=0.29 pu | Real:  2 | Feas Total:  6 | ETA: 1.0 min
+  [Worker 5 | Progress   7/85] P_G5=0.29 pu | Real:  2 | Feas Total:  7 | ETA: 1.0 min
+  [Worker 5 | Progress   8/85] P_G5=0.29 pu | Real:  2 | Feas Total:  8 | ETA: 1.0 min
+  [Worker 5 | Progress   9/85] P_G5=0.29 pu | Real:  2 | Feas Total:  9 | ETA: 1.0 min
+  [Worker 5 | Progress  10/85] P_G5=0.29 pu | Real:  2 | Feas Total: 10 | ETA: 0.9 min
+  [Worker 5 | Progress  16/85] P_G5=0.29 pu | Real:  2 | Feas Total: 11 | ETA: 0.9 min
+  [Worker 5 | Progress  17/85] P_G5=0.29 pu | Real:  2 | Feas Total: 12 | ETA: 0.9 min
+  [Worker 5 | Progress  18/85] P_G5=0.29 pu | Real:  2 | Feas Total: 13 | ETA: 0.9 min
+  [Worker 5 | Progress  19/85] P_G5=0.29 pu | Real:  2 | Feas Total: 14 | ETA: 0.8 min
+  [Worker 5 | Progress  20/85] P_G5=0.29 pu | Real:  2 | Feas Total: 15 | ETA: 0.8 min
+  [Worker 5 | Progress  21/85] P_G5=0.29 pu | Real:  2 | Feas Total: 16 | ETA: 0.8 min
+  [Worker 5 | Progress  22/85] P_G5=0.29 pu | Real:  2 | Feas Total: 17 | ETA: 0.8 min
+  [Worker 5 | Progress  23/85] P_G5=0.29 pu | Real:  2 | Feas Total: 18 | ETA: 0.8 min
+  [Worker 5 | Progress  24/85] P_G5=0.29 pu | Real:  2 | Feas Total: 19 | ETA: 0.8 min
+  [Worker 5 | Progress  25/85] P_G5=0.29 pu | Real:  2 | Feas Total: 20 | ETA: 0.8 min
+  [Worker 5 | Progress  30/85] P_G5=0.58 pu | Real:  2 | Feas Total: 20 | ETA: 0.7 min
+  [Worker 5 | Progress  40/85] P_G5=0.58 pu | Real:  2 | Feas Total: 20 | ETA: 0.6 min
+  [Worker 5 | Progress  50/85] P_G5=0.58 pu | Real:  2 | Feas Total: 20 | ETA: 0.4 min
+  [Worker 5 | Progress  60/85] P_G5=0.58 pu | Real:  2 | Feas Total: 20 | ETA: 0.3 min
+  [Worker 5 | Progress  70/85] P_G5=0.58 pu | Real:  2 | Feas Total: 20 | ETA: 0.2 min
+  [Worker 5 | Progress  80/85] P_G5=0.58 pu | Real:  2 | Feas Total: 20 | ETA: 0.1 min
+
+✔ [Worker 5] Sweep Complete! Found 20 points.
+✔ Data saved to: 'wb5_feasible_points_part_5.pkl'

@@ -1,0 +1,18 @@
+PHCv2.4.94 released 2026-04-16 works!
+Loading system data from WB5.m...
+Grid discretizaton complete: 3375 coordinates generated.
+
+[Worker 17/39] Starting NPHC Sweep across 84 coordinates...
+Time started: 22:02:24
+
+  [Worker 17 | Progress  10/84] P_G5=1.74 pu | Real:  6 | Feas Total:  0 | ETA: 0.9 min
+  [Worker 17 | Progress  20/84] P_G5=1.74 pu | Real:  8 | Feas Total:  0 | ETA: 0.8 min
+  [Worker 17 | Progress  30/84] P_G5=1.74 pu | Real:  8 | Feas Total:  0 | ETA: 0.7 min
+  [Worker 17 | Progress  40/84] P_G5=1.74 pu | Real:  8 | Feas Total:  0 | ETA: 0.6 min
+  [Worker 17 | Progress  50/84] P_G5=1.74 pu | Real:  8 | Feas Total:  0 | ETA: 0.4 min
+  [Worker 17 | Progress  60/84] P_G5=1.74 pu | Real:  8 | Feas Total:  0 | ETA: 0.3 min
+  [Worker 17 | Progress  70/84] P_G5=1.74 pu | Real:  8 | Feas Total:  0 | ETA: 0.2 min
+  [Worker 17 | Progress  80/84] P_G5=1.74 pu | Real:  8 | Feas Total:  0 | ETA: 0.1 min
+
+✔ [Worker 17] Sweep Complete! Found 0 points.
+✔ Data saved to: 'wb5_feasible_points_part_17.pkl'
