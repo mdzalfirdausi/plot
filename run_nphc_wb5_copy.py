@@ -4,6 +4,8 @@ import time
 import pickle
 import numpy as np
 import phcpy
+import multiprocessing as mp
+
 from phcpy.solver import solve
 from phcpy.solutions import coordinates
 
@@ -232,52 +234,69 @@ def parse_phcpy_real_roots(raw_solutions, var_names):
     return real_roots
 
 # =============================================================================
-# EXECUTE FULL PRODUCTION SWEEP ACROSS ENTIRE GRID (SLURM ARRAY ENABLED)
+# EXECUTE FULL PRODUCTION SWEEP (AUTO-SCALING MULTIPROCESSING EDITION)
 # =============================================================================
- 
-# 1. Grab the SLURM Array ID. If running locally on your laptop, it defaults to Task 0 of 1.
-array_id = int(os.environ.get('SLURM_ARRAY_TASK_ID', 0))
-num_tasks = int(os.environ.get('SLURM_ARRAY_TASK_COUNT', 1))
 
-# 2. Split the 3,375 grid coordinates into equal chunks
-chunks = np.array_split(candidate_controls, num_tasks)
-eval_grid = chunks[array_id]  # This specific worker only processes its assigned chunk!
-total_points = len(eval_grid)
+# 1. AUTOMATIC CPU DETECTION
+# Reads SLURM allocation first; if not in SLURM, falls back to local hardware max cores
+num_workers = int(os.environ.get('SLURM_CPUS_PER_TASK', mp.cpu_count()))
+total_points = len(candidate_controls)
 
-print(f"\n[Worker {array_id}/{num_tasks-1}] Starting NPHC Sweep across {total_points:,} coordinates...")
+print(f"\n[Auto-Scale Engine] Initializing sweep across {total_points:,} coordinates...")
+print(f"[Auto-Scale Engine] Detected {num_workers} CPU cores. Spawning parallel process pool...")
 print(f"Time started: {time.strftime('%X')}\n")
 
-feasible_points = []
-start_time = time.time()
-
-for k, u_k in enumerate(eval_grid):
+# 2. DEFINE THE INDEPENDENT WORKER FUNCTION
+# This function must be top-level so multiprocessing can send it to separate CPU cores
+def evaluate_grid_point(args):
+    k, u_k = args
+    # Build and solve the polynomial system for this specific coordinate
     pols, var_names = build_phcpy_system_strings(u_k, bus_data, gen_data, Ybus, slack_bus, active_gens, control_names)
     raw_complex_solutions = solve(pols)
     real_roots = parse_phcpy_real_roots(raw_complex_solutions, var_names)
     
-    num_feas = 0
+    # Check physical OPF feasibility
     for sol_x in real_roots:
         is_feas, P_gen, Q_gen, V_mag, S_flows = filter_feasible_point(
             sol_x, u_k, bus_data, gen_data, branch_data, Ybus, slack_bus, active_gens, control_names
         )
         if is_feas:
             cost = 400.0 * P_gen[0] + 100.0 * P_gen[4]
-            feasible_points.append({
+            return {
                 'u_k': u_k, 'P_gen': P_gen, 'Q_gen': Q_gen, 'V_mag': V_mag, 'cost': cost
-            })
-            num_feas += 1
-            break 
+            }
+    return None  # Return None if no real roots were physically feasible
+
+# 3. EXECUTE IN PARALLEL ACROSS ALL CORES
+start_time = time.time()
+feasible_points = []
+completed_count = 0
+
+# Package the grid index and control vector together for the worker pool
+tasks = [(k, u_k) for k, u_k in enumerate(candidate_controls)]
+
+# Spawn the worker pool and process coordinates asynchronously
+with mp.Pool(processes=num_workers) as pool:
+    # imap_unordered yields results as soon as any CPU core finishes a point
+    for result in pool.imap_unordered(evaluate_grid_point, tasks, chunksize=5):
+        completed_count += 1
+        
+        if result is not None:
+            feasible_points.append(result)
             
-    if (k + 1) % 10 == 0 or num_feas > 0:
-        elapsed_sec = time.time() - start_time
-        rate = (k + 1) / elapsed_sec
-        est_rem_min = ((total_points - (k + 1)) / rate) / 60.0
-        print(f"  [Worker {array_id} | Progress {(k+1):3d}/{total_points:,}] P_G5={u_k[0]:.2f} pu | Real: {len(real_roots):2d} | Feas Total: {len(feasible_points):2d} | ETA: {est_rem_min:.1f} min", flush=True)
+        # Log progress cleanly every 100 completions
+        if completed_count % 100 == 0 or completed_count == total_points:
+            elapsed_sec = time.time() - start_time
+            rate = completed_count / elapsed_sec
+            est_rem_min = ((total_points - completed_count) / rate) / 60.0
+            print(f"  [Progress {completed_count:4d}/{total_points:,} | {completed_count/total_points*100:5.1f}%] Feasible Total: {len(feasible_points):3d} | Rate: {rate:.1f} pts/sec | ETA: {est_rem_min:.1f} min", flush=True)
 
-print(f"\n✔ [Worker {array_id}] Sweep Complete! Found {len(feasible_points)} points.")
+print(f"\n✔ Auto-Scaling Production Sweep Complete!")
+print(f"  Total Time Elapsed: {(time.time() - start_time)/60:.2f} minutes")
+print(f"  Strictly Feasible OPF Operating Points Found: {len(feasible_points):,}")
 
-# 3. Save to a UNIQUE filename so workers don't overwrite each other!
-output_filename = f"wb5_feasible_points_part_{array_id}.pkl"
+# 4. SAVE FINAL RESULT TO DISK
+output_filename = "wb5_feasible_points_FINAL.pkl"
 with open(output_filename, "wb") as f:
     pickle.dump(feasible_points, f)
-print(f"✔ Data saved to: '{output_filename}'")
+print(f"✔ Combined dataset persisted to disk: '{output_filename}' (Ready for Cell 5 plotting!)")
