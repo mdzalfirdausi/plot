@@ -9,21 +9,23 @@
 #SBATCH --mem=64G                            
 #SBATCH --time=01:00:00
 
-# =================================================================
-# FIX: Force the compute node to enter your project directory!
-# =================================================================
+# Force the compute node to enter your project directory
 cd $SLURM_SUBMIT_DIR
 
-# =================================================================
 # Activate Conda
-# =================================================================
 source /software/conda/etc/profile.d/conda.sh
 conda activate pytorch
-export LD_PRELOAD=/usr/lib64/libstdc++.so.6:$LD_PRELOAD
+
+# =================================================================
+# REAL FIX: Point to the modern C++ libraries inside your Conda env!
+# =================================================================
+export LD_LIBRARY_PATH=/home/g202210120/.conda/envs/pytorch/lib:$LD_LIBRARY_PATH
+export LD_PRELOAD=/home/g202210120/.conda/envs/pytorch/lib/libstdc++.so.6
+
 # Create logs directory if it doesn't exist
 mkdir -p logs
 
-# Force math libraries to stay strictly single-threaded per worker process.
+# Force math libraries to stay strictly single-threaded per worker process
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
