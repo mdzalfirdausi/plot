@@ -12,16 +12,17 @@
 # Force the compute node to enter your project directory
 cd $SLURM_SUBMIT_DIR
 
-# Activate Conda
+# 1. Unset any inherited library preloads so Conda activates cleanly without error
+unset LD_PRELOAD
+unset LD_LIBRARY_PATH
+
+# 2. Activate Conda
 source /software/conda/etc/profile.d/conda.sh
 conda activate pytorch
 
-# =================================================================
-# THE MAGIC LINES THAT GIT OVERWROTE:
-# Point to the modern C++ libraries inside your Conda env!
-# =================================================================
-export LD_LIBRARY_PATH=/home/g202210120/.conda/envs/pytorch/lib:$LD_LIBRARY_PATH
-export LD_PRELOAD=/home/g202210120/.conda/envs/pytorch/lib/libstdc++.so.6
+# 3. CRITICAL FIX: Preload the host Linux system's C++ library (NOT Conda's!)
+# This bridges the Ada/GNAT runtime required by libPHCpack.so
+export LD_PRELOAD=/usr/lib64/libstdc++.so.6:$LD_PRELOAD
 
 # Create logs directory if it doesn't exist
 mkdir -p logs
@@ -34,7 +35,7 @@ export OPENBLAS_NUM_THREADS=1
 # Get the absolute path of the currently active Python interpreter
 PYTHON_PATH=$(which python)
 
-# numactl --interleave=all stripes RAM access evenly across all NUMA nodes
+# Execute the solver
 if command -v numactl &> /dev/null; then
     echo "Running with NUMA memory interleaving enabled using: $PYTHON_PATH"
     numactl --interleave=all "$PYTHON_PATH" run_nphc_wb5_warmstart_gemini.py
