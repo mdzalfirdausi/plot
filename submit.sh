@@ -9,6 +9,12 @@
 #SBATCH --mem=64G                            # 64 GB RAM (1 GB per solver process)
 #SBATCH --time=01:00:00
 
+# =================================================================
+# FIX: explicitly activate Conda on the remote compute node!
+# =================================================================
+source /software/conda/etc/profile.d/conda.sh
+conda activate pytorch
+
 # Create logs directory if it doesn't exist
 mkdir -p logs
 
