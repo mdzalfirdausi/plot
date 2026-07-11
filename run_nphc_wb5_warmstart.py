@@ -314,7 +314,7 @@ if __name__ == '__main__':
     print(f"  Total Time Elapsed: {(time.time() - start_time)/60:.2f} minutes")
     print(f"  Strictly Feasible OPF Operating Points Found: {len(feasible_points):,}")
 
-    output_filename = "wb5_feasible_points_FINAL.pkl"
+    output_filename = "output/wb5_feasible_points_FINAL.pkl"
     with open(output_filename, "wb") as f:
         pickle.dump(feasible_points, f)
     print(f"✔ Combined dataset persisted to disk: '{output_filename}'")

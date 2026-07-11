@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=wb5_nphc_max
 #SBATCH --partition=main
-#SBATCH --output=logs/wb5_max_%j.out
-#SBATCH --error=logs/wb5_max_%j.err
+#SBATCH --output=logs/%j_wb5_max.out
+#SBATCH --error=logs/%j_wb5_max.err
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16            # Request ALL 16 CPU cores on the node!
 #SBATCH --mem=8G                      # 8 GB RAM to support 16 simultaneous solvers
