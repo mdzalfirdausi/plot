@@ -14,34 +14,19 @@ import os
 import re
 import time
 import pickle
+import tempfile
 import numpy as np
 import multiprocessing as mp
 
-import phcpy
-from phcpy.solver import solve
-from phcpy.solutions import coordinates
-
-# Try to import the tracking function.
-# Confirmed correct name (from actual phcpy docs on this install): double_track
-try:
-    from phcpy.trackers import double_track as tracker_func
-    TRACKER_NAME = "double_track"
-    print("✓ Using phcpy.trackers.double_track")
-except ImportError:
-    try:
-        from phcpy.trackers import standard_double_track as tracker_func
-        TRACKER_NAME = "standard_double_track"
-        print("✓ Using phcpy.trackers.standard_double_track")
-    except ImportError:
-        try:
-            from phcpy.trackers import track as tracker_func
-            TRACKER_NAME = "track"
-            print("✓ Using phcpy.trackers.track")
-        except ImportError:
-            print("⚠ Warning: No tracking function found; will use fresh solve() at every point")
-            print("  (this will be slower, but should still work)")
-            tracker_func = None
-            TRACKER_NAME = "none"
+# NOTE: phcpy is intentionally NOT imported here at module level.
+# It is imported lazily inside each worker process (see _ensure_phcpy_imported
+# below). This matters because multiprocessing forks/spawns workers from this
+# module -- if phcpy's underlying Ada/Fortran library were already initialized
+# in the parent process before workers are created, forked/spawned children
+# could inherit corrupted/shared global state (scratch files, internal index
+# tables), which is exactly what produces errors like
+# "form_LP : no index match for reused info" when many workers hit phcpy
+# concurrently.
 
 # =============================================================================
 # PART 1: SYSTEM SETUP & PARSING
@@ -293,13 +278,13 @@ def build_phcpy_system_strings(u_k, bus_data, gen_data, Ybus, slack_bus,
     return poly_equations, var_names
 
 
-def parse_phcpy_real_roots(raw_solutions, var_names, imag_tol=1e-3):
+def parse_phcpy_real_roots(coordinates_fn, raw_solutions, var_names, imag_tol=1e-3):
     real_roots = []
     if not raw_solutions:
         return real_roots
     for sol in raw_solutions:
         try:
-            vars_list, vals_list = coordinates(sol)
+            vars_list, vals_list = coordinates_fn(sol)
             sol_dict = dict(zip(vars_list, vals_list))
             if not all(v in sol_dict for v in var_names):
                 continue
@@ -312,19 +297,71 @@ def parse_phcpy_real_roots(raw_solutions, var_names, imag_tol=1e-3):
 
 
 # =============================================================================
-# PART 4: CHUNK WORKER WITH TRACKING ATTEMPT
+# PART 4: PER-WORKER LAZY PHCPY IMPORT (fixes "form_LP : no index match" crash)
 # =============================================================================
-print("[4/5] Launching solver...")
+# PHCpack's underlying Ada/Fortran library keeps global state (scratch files,
+# internal index tables). If phcpy is imported once in the parent process and
+# then multiprocessing forks/spawns many workers, those workers can inherit or
+# collide over that shared state -- this is what produces errors like
+# "form_LP : no index match for reused info" once enough workers hit phcpy
+# concurrently. The fix: import phcpy fresh INSIDE each worker process (after
+# it's already running as its own OS process), and give each worker its own
+# scratch working directory so PHCpack's fixed-name temp files never collide.
+_WORKER_STATE = {}  # per-process cache: {'solve':..., 'track':..., 'coordinates':...}
+
+
+def _ensure_phcpy_imported():
+    if _WORKER_STATE:
+        return _WORKER_STATE
+
+    # Give this worker its own private scratch directory. PHCpack writes
+    # fixed-name temp files relative to the current working directory, so
+    # many concurrent workers sharing one cwd will stomp on each other's files.
+    worker_dir = tempfile.mkdtemp(prefix="phcpy_worker_")
+    os.chdir(worker_dir)
+
+    import phcpy  # noqa: F401  (import here, not at module level -- see above)
+    from phcpy.solver import solve as _solve
+    from phcpy.solutions import coordinates as _coordinates
+
+    tracker_fn, tracker_name = None, "none"
+    try:
+        from phcpy.trackers import double_track as tracker_fn
+        tracker_name = "double_track"
+    except ImportError:
+        try:
+            from phcpy.trackers import standard_double_track as tracker_fn
+            tracker_name = "standard_double_track"
+        except ImportError:
+            try:
+                from phcpy.trackers import track as tracker_fn
+                tracker_name = "track"
+            except ImportError:
+                pass
+
+    _WORKER_STATE['solve'] = _solve
+    _WORKER_STATE['coordinates'] = _coordinates
+    _WORKER_STATE['track'] = tracker_fn
+    _WORKER_STATE['tracker_name'] = tracker_name
+    return _WORKER_STATE
+
+
 REFRESH_EVERY = 20
 
 
 def evaluate_chunk(chunk):
     """
-    Walk one contiguous slice of the grid sequentially.
+    Walk one contiguous slice of the grid sequentially, in this worker's own
+    process (own phcpy import, own scratch dir -- see _ensure_phcpy_imported).
     - First point: ab initio solve() (expensive)
     - Subsequent points: try to warm-start via tracking (cheap)
     - Fallback: if tracking fails/unavailable, use fresh solve()
     """
+    state = _ensure_phcpy_imported()
+    solve_fn = state['solve']
+    coordinates_fn = state['coordinates']
+    tracker_fn = state['track']
+
     results = []
     prev_pols, prev_sols = None, None
     failed_tracks = 0
@@ -336,28 +373,29 @@ def evaluate_chunk(chunk):
         need_ab_initio = (
             prev_sols is None
             or step % REFRESH_EVERY == 0
-            or tracker_func is None
+            or tracker_fn is None
         )
 
         if need_ab_initio:
-            raw_sols = solve(pols)
+            raw_sols = solve_fn(pols)
         else:
-            # Try warm-start tracking
             try:
-                raw_sols = tracker_func(pols, prev_pols, prev_sols)
-                
-                # Safety net: if solution count dropped by >50%, recapture via ab initio
+                raw_sols = tracker_fn(pols, prev_pols, prev_sols)
                 if raw_sols and prev_sols and len(raw_sols) < 0.5 * len(prev_sols):
-                    raw_sols = solve(pols)
-                    
-            except Exception as e:
-                # Tracking failed; fall back to ab initio
-                raw_sols = solve(pols)
+                    raw_sols = solve_fn(pols)
+            except Exception:
+                # Tracking failed (e.g. a transient PHCpack internal error) --
+                # fall back to a fresh ab initio solve rather than crashing
+                # this worker / the whole sweep.
+                try:
+                    raw_sols = solve_fn(pols)
+                except Exception:
+                    raw_sols = []
                 failed_tracks += 1
 
         prev_pols, prev_sols = pols, raw_sols
 
-        real_roots = parse_phcpy_real_roots(raw_sols, var_names)
+        real_roots = parse_phcpy_real_roots(coordinates_fn, raw_sols, var_names)
         for sol_x in real_roots:
             is_feas, P_gen, Q_gen, V_mag, S_flows = filter_feasible_point(
                 sol_x, u_k, bus_data, gen_data, branch_data, Ybus,
@@ -377,7 +415,21 @@ def evaluate_chunk(chunk):
 # PART 5: EXECUTE IN PARALLEL
 # =============================================================================
 if __name__ == "__main__":
-    num_workers = int(os.environ.get('SLURM_CPUS_PER_TASK', mp.cpu_count()))
+    # Use 'spawn' instead of the platform default ('fork' on Linux). With
+    # fork, worker processes would inherit a COPY of any phcpy state already
+    # initialized in the parent -- unsafe for a stateful Ada/Fortran backend.
+    # spawn starts each worker as a genuinely fresh Python interpreter, so
+    # phcpy is only ever initialized once per worker, inside that worker.
+    mp.set_start_method('spawn', force=True)
+
+    # Cap the worker count. Running very large numbers of concurrent PHCpack
+    # instances (e.g. 128) on one node is what triggered
+    # "form_LP : no index match for reused info" -- back off to something
+    # closer to physical core count / a known-safe ceiling, and raise this
+    # only after confirming a smaller run is stable.
+    requested_workers = int(os.environ.get('SLURM_CPUS_PER_TASK', mp.cpu_count()))
+    MAX_SAFE_WORKERS = 16
+    num_workers = min(requested_workers, MAX_SAFE_WORKERS)
     total_points = len(candidate_controls)
 
     # Split into contiguous chunks (contiguous in meshgrid-ravel order).
@@ -393,8 +445,8 @@ if __name__ == "__main__":
     ]
 
     print(f"[5/5] Executing NPHC sweep")
-    print(f"      {total_points:,} grid points / {len(chunks)} chunks / {num_workers} CPUs")
-    print(f"      Tracker: {TRACKER_NAME}")
+    print(f"      {total_points:,} grid points / {len(chunks)} chunks / "
+          f"{num_workers} workers (requested {requested_workers}, capped at {MAX_SAFE_WORKERS})")
     print(f"      Warm-start refresh every {REFRESH_EVERY} points")
     print(f"      Started: {time.strftime('%X')}\n")
 
