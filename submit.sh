@@ -30,7 +30,7 @@ PYTHON_PATH=$(which python)
 # numactl --interleave=all stripes RAM access evenly across all NUMA nodes
 if command -v numactl &> /dev/null; then
     echo "Running with NUMA memory interleaving enabled using: $PYTHON_PATH"
-    numactl --interleave=all "$PYTHON_PATH" run_nphc_wb5_warmstart.py
+    numactl --interleave=all "$PYTHON_PATH" run_nphc_wb5_warmstart_gemini.py
 else
     echo "numactl not found, running standard python execution..."
     python run_nphc_wb5_warmstart_gemini.py
