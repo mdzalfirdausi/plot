@@ -45,7 +45,7 @@ def load_case_data(filepath):
     baseMVA = float(base_match.group(1)) if base_match else 100.0
     return baseMVA, parse_matpower_matrix(content, 'bus'), parse_matpower_matrix(content, 'gen'), parse_matpower_matrix(content, 'branch')
 
-filepath = './WB5.m'
+filepath = '.\WB5.m'
 baseMVA, bus_data, gen_data, branch_data = load_case_data(filepath)
 
 bus_data[:, 0] -= 1
