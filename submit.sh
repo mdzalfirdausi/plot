@@ -17,7 +17,8 @@ source /software/conda/etc/profile.d/conda.sh
 conda activate pytorch
 
 # =================================================================
-# REAL FIX: Point to the modern C++ libraries inside your Conda env!
+# THE MAGIC LINES THAT GIT OVERWROTE:
+# Point to the modern C++ libraries inside your Conda env!
 # =================================================================
 export LD_LIBRARY_PATH=/home/g202210120/.conda/envs/pytorch/lib:$LD_LIBRARY_PATH
 export LD_PRELOAD=/home/g202210120/.conda/envs/pytorch/lib/libstdc++.so.6
