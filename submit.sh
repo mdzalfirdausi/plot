@@ -19,7 +19,7 @@ cd $SLURM_SUBMIT_DIR
 # =================================================================
 source /software/conda/etc/profile.d/conda.sh
 conda activate pytorch
-
+export LD_PRELOAD=/usr/lib64/libstdc++.so.6:$LD_PRELOAD
 # Create logs directory if it doesn't exist
 mkdir -p logs
 
