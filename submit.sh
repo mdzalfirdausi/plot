@@ -1,16 +1,21 @@
 #!/bin/bash
 #SBATCH --job-name=wb5_nphc_max
-#SBATCH --partition=cpu_x440                 # Target the idle cpu_x440 partition
-#SBATCH --output=logs/%j_wb5.out         # Log filename starts with Job ID
-#SBATCH --error=logs/%j_wb5.err          # Error log starts with Job ID
+#SBATCH --partition=cpu_x440                 
+#SBATCH --output=logs/%j_wb5.out         
+#SBATCH --error=logs/%j_wb5.err          
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=64                   # Request 64 physical execution cores
-#SBATCH --mem=64G                            # 64 GB RAM (1 GB per solver process)
+#SBATCH --cpus-per-task=64                   
+#SBATCH --mem=64G                            
 #SBATCH --time=01:00:00
 
 # =================================================================
-# FIX: explicitly activate Conda on the remote compute node!
+# FIX: Force the compute node to enter your project directory!
+# =================================================================
+cd $SLURM_SUBMIT_DIR
+
+# =================================================================
+# Activate Conda
 # =================================================================
 source /software/conda/etc/profile.d/conda.sh
 conda activate pytorch
@@ -19,7 +24,6 @@ conda activate pytorch
 mkdir -p logs
 
 # Force math libraries to stay strictly single-threaded per worker process.
-# This prevents 64 Python workers from attempting to spawn 64 threads each!
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
