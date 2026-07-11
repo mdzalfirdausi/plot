@@ -1,8 +1,8 @@
 """
-run_nphc_wb5_slurm_warmstart.py
+run_nphc_wb5_warmstart_gemini.py
 ==========================================================================
-Bulletproof Warm-started NPHC for SLURM Job Arrays.
-No Python multiprocessing. Relies on OS-level SLURM isolation.
+Universal Warm-Started NPHC for WB5 Feasible Space.
+Works on local Windows laptop for testing and Linux SLURM HPC for production.
 """
 import os
 import re
@@ -10,12 +10,11 @@ import time
 import pickle
 import numpy as np
 
-# Safe to import globally now because we are running single-threaded per script!
 import phcpy
 from phcpy.solver import solve
 from phcpy.solutions import coordinates
 
-# Handle API variations for trackers
+# Handle API variations for trackers across different platforms
 try:
     from phcpy.trackers import double_track as track
 except ImportError:
@@ -25,7 +24,7 @@ except ImportError:
         from phcpy.trackers import track
 
 # =============================================================================
-# PART 1: SYSTEM SETUP & PARSING
+# PART 1: UNIVERSAL SYSTEM SETUP & PARSING
 # =============================================================================
 def parse_matpower_matrix(content, matrix_name):
     pattern = rf'mpc\.{matrix_name}\s*=\s*\[(.*?)\];'
@@ -45,8 +44,10 @@ def load_case_data(filepath):
     baseMVA = float(base_match.group(1)) if base_match else 100.0
     return baseMVA, parse_matpower_matrix(content, 'bus'), parse_matpower_matrix(content, 'gen'), parse_matpower_matrix(content, 'branch')
 
+# UNIVERSAL PATH FIX: Automatically finds WB5.m in the same folder as this script
 script_dir = os.path.dirname(os.path.abspath(__file__))
 filepath = os.path.join(script_dir, 'WB5.m')
+
 baseMVA, bus_data, gen_data, branch_data = load_case_data(filepath)
 
 bus_data[:, 0] -= 1
@@ -75,7 +76,7 @@ for row in branch_data:
     Ybus[t, f] -= y_s
 
 # =============================================================================
-# PART 2: CONTROL SPACE DISCRETIZATION
+# PART 2: TARGETED CONTROL BOUNDS (For Molzahn 2017 Fig 3)
 # =============================================================================
 active_gens = gen_data[gen_data[:, 7] == 1]
 p_ranges = active_gens[:, 8] - active_gens[:, 9]
@@ -88,7 +89,7 @@ control_names, u_min, u_max = [], [], []
 for gen in non_slack_gens:
     bus_id = int(gen[0])
     control_names.append(f"P_G{bus_id+1}")
-    u_min.append(0.50)  # Targeted Bounds for Molzahn 2017
+    u_min.append(0.50)  # Target the disconnected component zone
     u_max.append(3.50)
 
 for gen in active_gens:
@@ -111,7 +112,7 @@ candidate_controls = np.vstack([grid.ravel() for grid in mesh_grids]).T
 total_points = len(candidate_controls)
 
 # =============================================================================
-# PART 3: HOMOTOPY HELPER FUNCTIONS
+# PART 3: HOMOTOPY & FEASIBILITY HELPERS
 # =============================================================================
 def compute_branch_flows(Vd, Vq, Ybus, branch_data):
     n_lines = len(branch_data)
@@ -242,17 +243,14 @@ def parse_phcpy_real_roots(raw_solutions, var_names, imag_tol=1e-3):
     return real_roots
 
 # =============================================================================
-# PART 4: EXECUTE CHUNK (SINGLE THREADED)
+# PART 4: EXECUTE WARM-START NPHC SWEEP
 # =============================================================================
 if __name__ == "__main__":
-    # Detect SLURM Array ID
     task_id = int(os.environ.get('SLURM_ARRAY_TASK_ID', 0))
     num_tasks = int(os.environ.get('SLURM_ARRAY_TASK_COUNT', 1))
 
-    # Split the full grid into equal chunks for each SLURM job
     chunks = np.array_split(candidate_controls, num_tasks)
     
-    # If running locally on Laptop (num_tasks=1), force a small chunk to prevent hanging!
     if num_tasks == 1:
         print("\n⚠️ Running locally on laptop (Not via SLURM).")
         print("Truncating from 14,400 points to 50 points for local test.")
@@ -274,13 +272,11 @@ if __name__ == "__main__":
         pols, var_names = build_phcpy_system_strings(
             u_k, bus_data, gen_data, Ybus, slack_bus, active_gens, control_names)
 
-        # WARM START TRACKING LOGIC
         if prev_sols is None or step % REFRESH_EVERY == 0:
             raw_sols = solve(pols)
         else:
             try:
                 raw_sols = track(pols, prev_pols, prev_sols)
-                # If tracking dropped too many paths, re-solve from scratch
                 if raw_sols and prev_sols and len(raw_sols) < 0.5 * len(prev_sols):
                     raw_sols = solve(pols)
             except Exception:
@@ -289,7 +285,6 @@ if __name__ == "__main__":
 
         prev_pols, prev_sols = pols, raw_sols
 
-        # Evaluate Physical Feasibility
         real_roots = parse_phcpy_real_roots(raw_sols, var_names)
         for sol_x in real_roots:
             is_feas, P_gen, Q_gen, V_mag, S_flows = filter_feasible_point(
@@ -299,7 +294,7 @@ if __name__ == "__main__":
                 feasible_points.append({
                     'u_k': u_k, 'P_gen': P_gen, 'Q_gen': Q_gen, 'V_mag': V_mag, 'cost': cost
                 })
-                break  # Keep first feasible
+                break 
 
         if (step + 1) % 10 == 0 or (step + 1) == chunk_size:
             rate = (step + 1) / max((time.time() - start_time), 0.01)
@@ -309,7 +304,6 @@ if __name__ == "__main__":
     print(f"\n[Worker {task_id+1}] COMPLETE! Time: {(time.time() - start_time)/60:.1f}m")
     if failed_tracks > 0: print(f"  (Tracking failed & fell back to solve {failed_tracks} times)")
 
-    # Save unique file for this worker
     output_filename = f"wb5_feasible_points_part_{task_id}.pkl"
     with open(output_filename, "wb") as f:
         pickle.dump(feasible_points, f)

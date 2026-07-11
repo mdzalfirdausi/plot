@@ -9,33 +9,32 @@
 #SBATCH --mem=64G                            
 #SBATCH --time=01:00:00
 
-# Force the compute node to enter your project directory
+# 1. Enter the directory where the sbatch command was executed
 cd $SLURM_SUBMIT_DIR
 
-# 1. Unset any inherited library preloads so Conda activates cleanly without error
-unset LD_PRELOAD
-unset LD_LIBRARY_PATH
-
-# 2. Activate Conda
+# 2. Activate Conda cleanly
 source /software/conda/etc/profile.d/conda.sh
 conda activate pytorch
 
-# 3. CRITICAL FIX: Preload the host Linux system's C++ library (NOT Conda's!)
-# This bridges the Ada/GNAT runtime required by libPHCpack.so
-export LD_PRELOAD=/usr/lib64/libstdc++.so.6:$LD_PRELOAD
+# =================================================================
+# THE CRITICAL C++ BRIDGE (Now safely tracked in Git!):
+# Tells Linux to use your Conda env's modern C++ library so libPHCpack
+# doesn't crash with a NoneType error on the compute node.
+# =================================================================
+export LD_LIBRARY_PATH=/home/g202210120/.conda/envs/pytorch/lib:$LD_LIBRARY_PATH
+export LD_PRELOAD=/home/g202210120/.conda/envs/pytorch/lib/libstdc++.so.6
 
-# Create logs directory if it doesn't exist
+# 3. Create logs folder if it doesn't exist
 mkdir -p logs
 
-# Force math libraries to stay strictly single-threaded per worker process
+# 4. Prevent thread oversubscription
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
-# Get the absolute path of the currently active Python interpreter
 PYTHON_PATH=$(which python)
 
-# Execute the solver
+# 5. Execute the solver
 if command -v numactl &> /dev/null; then
     echo "Running with NUMA memory interleaving enabled using: $PYTHON_PATH"
     numactl --interleave=all "$PYTHON_PATH" run_nphc_wb5_warmstart_gemini.py
