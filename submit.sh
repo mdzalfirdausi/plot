@@ -18,12 +18,14 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 
+# Get the absolute path of the currently active Python interpreter
+PYTHON_PATH=$(which python)
+
 # numactl --interleave=all stripes RAM access evenly across all NUMA nodes
-# (Node 0, Node 1, etc.), eliminating interconnect bottlenecks between sockets.
 if command -v numactl &> /dev/null; then
-    echo "Running with NUMA memory interleaving enabled..."
-    numactl --interleave=all python run_nphc_wb5_max_perf.py
+    echo "Running with NUMA memory interleaving enabled using: $PYTHON_PATH"
+    numactl --interleave=all "$PYTHON_PATH" run_nphc_wb5_warmstart.py
 else
     echo "numactl not found, running standard python execution..."
-    python run_nphc_wb5_max_perf.py
+    python run_nphc_wb5_warmstart.py
 fi
