@@ -63,7 +63,7 @@ for row in branch_data:
     Ybus[t, f] -= y_s
 
 # =============================================================================
-# PART 2: CONTROL SPACE DISCRETIZATION (From Cell 2)
+# PART 2: TARGETED HIGH-DENSITY DISCRETIZATION (For Figure 3 Ribbon)
 # =============================================================================
 active_gens = gen_data[gen_data[:, 7] == 1]
 p_ranges = active_gens[:, 8] - active_gens[:, 9]
@@ -71,16 +71,14 @@ slack_idx_in_gen = np.argmax(p_ranges)
 slack_bus = int(active_gens[slack_idx_in_gen, 0])
 non_slack_gens = np.delete(active_gens, slack_idx_in_gen, axis=0)
 
-control_names = []
-u_min, u_max = [], []
-total_load_pu = np.sum(bus_data[:, 2])
+control_names, u_min, u_max = [], [], []
 
+# Lock P_G5 strictly to the disconnected manifold boundaries [0.5, 3.5]
 for gen in non_slack_gens:
     bus_id = int(gen[0])
     control_names.append(f"P_G{bus_id+1}")
-    u_min.append(gen[9])
-    plot_p_ceiling = min(gen[8], max(4.0, total_load_pu * 1.25))
-    u_max.append(plot_p_ceiling)
+    u_min.append(0.50)  
+    u_max.append(3.50)
 
 for gen in active_gens:
     bus_id = int(gen[0])
@@ -93,12 +91,15 @@ for gen in active_gens:
 
 u_min, u_max = np.array(u_min), np.array(u_max)
 num_controls = len(control_names)
-N_res = 15  # Grid Resolution
-d_sweeps = [np.linspace(u_min[i], u_max[i], N_res) for i in range(num_controls)]
+
+# ASYMMETRIC RESOLUTION: 100 steps on P_G5 (ΔP = 0.03 pu), 12 steps on voltages
+# Total Grid: 100 x 12 x 12 = 14,400 targeted coordinates
+N_res_P, N_res_V = 100, 12
+d_sweeps = [np.linspace(u_min[i], u_max[i], N_res_P if "P_G" in control_names[i] else N_res_V) for i in range(num_controls)]
 mesh_grids = np.meshgrid(*d_sweeps, indexing='ij')
 candidate_controls = np.vstack([grid.ravel() for grid in mesh_grids]).T
 
-print(f"Grid discretizaton complete: {len(candidate_controls)} coordinates generated.")
+print(f"Targeted Grid complete: {len(candidate_controls):,} coordinates generated.")
 
 # =============================================================================
 # PART 3: HOMOTOPY CONTINUATION & FILTERING (From Cell 4)
