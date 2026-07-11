@@ -10,7 +10,7 @@ from phcpy.solver import solve
 from phcpy.solutions import coordinates
 
 # =============================================================================
-# PART 1: SYSTEM SETUP & PARSING (From Cell 1)
+# PART 1: SYSTEM SETUP & PARSING 
 # =============================================================================
 def parse_matpower_matrix(content, matrix_name):
     pattern = rf'mpc\.{matrix_name}\s*=\s*\[(.*?)\];'
@@ -33,8 +33,10 @@ def load_case_data(filepath):
     baseMVA = float(base_match.group(1)) if base_match else 100.0
     return baseMVA, parse_matpower_matrix(content, 'bus'), parse_matpower_matrix(content, 'gen'), parse_matpower_matrix(content, 'branch')
 
-filepath = 'WB5.m' 
-print(f"Loading system data from {filepath}...")
+# Universal Pathing
+script_dir = os.path.dirname(os.path.abspath(__file__))
+filepath = os.path.join(script_dir, 'WB5.m')
+
 baseMVA, bus_data, gen_data, branch_data = load_case_data(filepath)
 
 bus_data[:, 0] -= 1
@@ -63,7 +65,7 @@ for row in branch_data:
     Ybus[t, f] -= y_s
 
 # =============================================================================
-# PART 2: TARGETED HIGH-DENSITY DISCRETIZATION (For Figure 3 Ribbon)
+# PART 2: CONTROL SPACE BOUNDS (Global level so workers can read them)
 # =============================================================================
 active_gens = gen_data[gen_data[:, 7] == 1]
 p_ranges = active_gens[:, 8] - active_gens[:, 9]
@@ -71,9 +73,10 @@ slack_idx_in_gen = np.argmax(p_ranges)
 slack_bus = int(active_gens[slack_idx_in_gen, 0])
 non_slack_gens = np.delete(active_gens, slack_idx_in_gen, axis=0)
 
-control_names, u_min, u_max = [], [], []
+control_names = []
+u_min, u_max = [], []
 
-# Lock P_G5 strictly to the disconnected manifold boundaries [0.5, 3.5]
+# TARGETED BOUNDING BOX (For Molzahn 2017 Fig 3)
 for gen in non_slack_gens:
     bus_id = int(gen[0])
     control_names.append(f"P_G{bus_id+1}")
@@ -92,17 +95,8 @@ for gen in active_gens:
 u_min, u_max = np.array(u_min), np.array(u_max)
 num_controls = len(control_names)
 
-# ASYMMETRIC RESOLUTION: 100 steps on P_G5 (ΔP = 0.03 pu), 12 steps on voltages
-# Total Grid: 100 x 12 x 12 = 14,400 targeted coordinates
-N_res_P, N_res_V = 100, 12
-d_sweeps = [np.linspace(u_min[i], u_max[i], N_res_P if "P_G" in control_names[i] else N_res_V) for i in range(num_controls)]
-mesh_grids = np.meshgrid(*d_sweeps, indexing='ij')
-candidate_controls = np.vstack([grid.ravel() for grid in mesh_grids]).T
-
-print(f"Targeted Grid complete: {len(candidate_controls):,} coordinates generated.")
-
 # =============================================================================
-# PART 3: HOMOTOPY CONTINUATION & FILTERING (From Cell 4)
+# PART 3: HOMOTOPY CONTINUATION & FILTERING 
 # =============================================================================
 def compute_branch_flows(Vd, Vq, Ybus, branch_data):
     n_lines = len(branch_data)
@@ -234,70 +228,69 @@ def parse_phcpy_real_roots(raw_solutions, var_names):
         except Exception: continue
     return real_roots
 
-# =============================================================================
-# EXECUTE FULL PRODUCTION SWEEP (AUTO-SCALING MULTIPROCESSING EDITION)
-# =============================================================================
-
-# 1. AUTOMATIC CPU DETECTION
-# Reads SLURM allocation first; if not in SLURM, falls back to local hardware max cores
-num_workers = int(os.environ.get('SLURM_CPUS_PER_TASK', mp.cpu_count()))
-total_points = len(candidate_controls)
-
-print(f"\n[Auto-Scale Engine] Initializing sweep across {total_points:,} coordinates...")
-print(f"[Auto-Scale Engine] Detected {num_workers} CPU cores. Spawning parallel process pool...")
-print(f"Time started: {time.strftime('%X')}\n")
-
-# 2. DEFINE THE INDEPENDENT WORKER FUNCTION
-# This function must be top-level so multiprocessing can send it to separate CPU cores
 def evaluate_grid_point(args):
+    """Independent Worker Function (Executed on separate CPU cores)"""
     k, u_k = args
-    # Build and solve the polynomial system for this specific coordinate
     pols, var_names = build_phcpy_system_strings(u_k, bus_data, gen_data, Ybus, slack_bus, active_gens, control_names)
     raw_complex_solutions = solve(pols)
     real_roots = parse_phcpy_real_roots(raw_complex_solutions, var_names)
     
-    # Check physical OPF feasibility
     for sol_x in real_roots:
         is_feas, P_gen, Q_gen, V_mag, S_flows = filter_feasible_point(
             sol_x, u_k, bus_data, gen_data, branch_data, Ybus, slack_bus, active_gens, control_names
         )
         if is_feas:
             cost = 400.0 * P_gen[0] + 100.0 * P_gen[4]
-            return {
-                'u_k': u_k, 'P_gen': P_gen, 'Q_gen': Q_gen, 'V_mag': V_mag, 'cost': cost
-            }
-    return None  # Return None if no real roots were physically feasible
+            return {'u_k': u_k, 'P_gen': P_gen, 'Q_gen': Q_gen, 'V_mag': V_mag, 'cost': cost}
+    return None
 
-# 3. EXECUTE IN PARALLEL ACROSS ALL CORES
-start_time = time.time()
-feasible_points = []
-completed_count = 0
+# =============================================================================
+# PART 4: PROTECTED MASTER EXECUTION BLOCK (Fixes the Fork Bomb!)
+# =============================================================================
+if __name__ == '__main__':
+    # 1. ASYMMETRIC RESOLUTION GRID (14,400 points)
+    # Generated INSIDE __main__ so child workers do not needlessly duplicate this math
+    N_res_P, N_res_V = 100, 12
+    d_sweeps = [np.linspace(u_min[i], u_max[i], N_res_P if "P_G" in control_names[i] else N_res_V) for i in range(num_controls)]
+    mesh_grids = np.meshgrid(*d_sweeps, indexing='ij')
+    candidate_controls = np.vstack([grid.ravel() for grid in mesh_grids]).T
+    total_points = len(candidate_controls)
 
-# Package the grid index and control vector together for the worker pool
-tasks = [(k, u_k) for k, u_k in enumerate(candidate_controls)]
+    print(f"Loading system data from {filepath}...")
+    print(f"Targeted Grid complete: {total_points:,} coordinates generated.")
 
-# Spawn the worker pool and process coordinates asynchronously
-with mp.Pool(processes=num_workers) as pool:
-    # imap_unordered yields results as soon as any CPU core finishes a point
-    for result in pool.imap_unordered(evaluate_grid_point, tasks, chunksize=5):
-        completed_count += 1
-        
-        if result is not None:
-            feasible_points.append(result)
+    # 2. AUTOMATIC CPU DETECTION
+    num_workers = int(os.environ.get('SLURM_CPUS_PER_TASK', mp.cpu_count()))
+    
+    print(f"\n[Auto-Scale Engine] Initializing sweep across {total_points:,} coordinates...")
+    print(f"[Auto-Scale Engine] Detected {num_workers} CPU cores. Spawning parallel process pool...")
+    print(f"Time started: {time.strftime('%X')}\n")
+
+    start_time = time.time()
+    feasible_points = []
+    completed_count = 0
+
+    tasks = [(k, u_k) for k, u_k in enumerate(candidate_controls)]
+
+    # 3. SPAWN POOL (Now protected from Windows recursion loops!)
+    with mp.Pool(processes=num_workers) as pool:
+        for result in pool.imap_unordered(evaluate_grid_point, tasks, chunksize=5):
+            completed_count += 1
             
-        # Log progress cleanly every 100 completions
-        if completed_count % 100 == 0 or completed_count == total_points:
-            elapsed_sec = time.time() - start_time
-            rate = completed_count / elapsed_sec
-            est_rem_min = ((total_points - completed_count) / rate) / 60.0
-            print(f"  [Progress {completed_count:4d}/{total_points:,} | {completed_count/total_points*100:5.1f}%] Feasible Total: {len(feasible_points):3d} | Rate: {rate:.1f} pts/sec | ETA: {est_rem_min:.1f} min", flush=True)
+            if result is not None:
+                feasible_points.append(result)
+                
+            if completed_count % 100 == 0 or completed_count == total_points:
+                elapsed_sec = time.time() - start_time
+                rate = completed_count / elapsed_sec
+                est_rem_min = ((total_points - completed_count) / rate) / 60.0
+                print(f"  [Progress {completed_count:5d}/{total_points:,} | {completed_count/total_points*100:5.1f}%] Feasible Total: {len(feasible_points):3d} | Rate: {rate:.1f} pts/sec | ETA: {est_rem_min:.1f} min", flush=True)
 
-print(f"\n✔ Auto-Scaling Production Sweep Complete!")
-print(f"  Total Time Elapsed: {(time.time() - start_time)/60:.2f} minutes")
-print(f"  Strictly Feasible OPF Operating Points Found: {len(feasible_points):,}")
+    print(f"\n✔ Auto-Scaling Production Sweep Complete!")
+    print(f"  Total Time Elapsed: {(time.time() - start_time)/60:.2f} minutes")
+    print(f"  Strictly Feasible OPF Operating Points Found: {len(feasible_points):,}")
 
-# 4. SAVE FINAL RESULT TO DISK
-output_filename = "wb5_feasible_points_FINAL.pkl"
-with open(output_filename, "wb") as f:
-    pickle.dump(feasible_points, f)
-print(f"✔ Combined dataset persisted to disk: '{output_filename}' (Ready for Cell 5 plotting!)")
+    output_filename = "wb5_feasible_points_FINAL.pkl"
+    with open(output_filename, "wb") as f:
+        pickle.dump(feasible_points, f)
+    print(f"✔ Combined dataset persisted to disk: '{output_filename}'")
