@@ -407,7 +407,7 @@ def evaluate_chunk(chunk):
                     'V_mag': V_mag, 'cost': cost
                 })
                 break  # Only keep first feasible root at each grid point
-
+ 
     return results, failed_tracks
 
 
