@@ -419,7 +419,7 @@ if __name__ == "__main__":
         print(f"(Note: {total_failed_tracks} tracking attempts fell back to ab initio solve)")
     print("="*70)
 
-    output_filename = "wb5_feasible_points_warmstart.pkl"
+    output_filename = "output/wb5_feasible_points_warmstart.pkl"
     with open(output_filename, "wb") as f:
         pickle.dump(feasible_points, f)
     print(f"\n✓ Saved to: '{output_filename}'")
