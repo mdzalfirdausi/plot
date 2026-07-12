@@ -20,7 +20,7 @@ parser.add_argument("--file", type=str, required=True, help="Path to MATPOWER fi
 args = parser.parse_args()
 
 # =============================================================================
-# PART 1: SYSTEM SETUP & PARSING
+# PART 1: SYSTEM SETUP & PARSING 
 # =============================================================================
 def parse_matpower_matrix(content, matrix_name):
     pattern = rf'mpc\.{matrix_name}\s*=\s*\[(.*?)\];'
@@ -179,19 +179,39 @@ def filter_feasible_point(state_x, u_k, bus_data, gen_data, branch_data, Ybus, s
 
     P_gen, Q_gen = P_inj + bus_data[:, 2], Q_inj + bus_data[:, 3]
 
-    # Load Bus Voltages within relaxed physical stability envelope
+    # 3. Load Bus Voltage Bounds Check (Strictly enforce WB5.m Vmin and Vmax)
     for bus_row in bus_data:
-        i = int(bus_row[0])
-        if i not in active_gens[:, 0]:
-            if not (0.88 <= V_mag[i] <= 1.12): return False, P_gen, Q_gen, V_mag, None
+        idx = int(bus_row[0])       # Already 0-based from global subtraction
+        
+        if idx not in active_gens[:, 0]:
+            # Extract exact Vmax (col 11) and Vmin (col 12) from mpc.bus
+            vmax = float(bus_row[11])
+            vmin = float(bus_row[12])
+            
+            # This strict 0.95 check forces the middle valley underwater!
+            if not (vmin <= V_mag[idx] <= vmax): 
+                return False, P_gen, Q_gen, V_mag, None
 
-    # Generator Bounds (relaxed Q_G5 down to -0.60 pu to preserve Figure 3 geometry)
+    # 4. Generator Bounds Check (Strictly enforce mpc.gen physical limits)
     for gen in active_gens:
-        i = int(gen[0])
-        q_min = -0.60 if i == (5 - 1) else -1.50
-        q_max = 1.50
-        if not (q_min <= Q_gen[i] <= q_max): return False, P_gen, Q_gen, V_mag, None
-        if not (gen[9] - tol <= P_gen[i] <= gen[8] + tol): return False, P_gen, Q_gen, V_mag, None
+        bus_id = int(gen[0])      # 1-based MATPOWER bus ID
+        idx = bus_id - 1          # 0-based Python array index
+        
+        # mpc.gen column 4 (index 3) is Qmax, column 5 (index 4) is Qmin
+        # These are pre-divided by baseMVA during loading (Part 1)
+        q_max = float(gen[3])
+        q_min = float(gen[4])
+        
+        p_max = float(gen[8])
+        p_min = float(gen[9])
+        
+        # Check Q bounds
+        if not (q_min - tol <= Q_gen[idx] <= q_max + tol): 
+            return False, P_gen, Q_gen, V_mag, None
+            
+        # Check P bounds
+        if not (p_min - tol <= P_gen[idx] <= p_max + tol): 
+            return False, P_gen, Q_gen, V_mag, None
 
     return True, P_gen, Q_gen, V_mag, None
 
