@@ -2,6 +2,11 @@
 cob.py — Replicating Molzahn (2017) Fig 3 Feasible Space Ribbon
 Uses Targeted Asymmetric Discretization & Parameter Continuation.
 """
+import argparse
+parser = argparse.ArgumentParser(description="Run NPHC Homotopy Solver.")
+parser.add_argument("--file", type=str, required=True, help="Path to MATPOWER file (.m)")
+args = parser.parse_args()
+
 import os
 import re
 import time
@@ -12,15 +17,7 @@ import multiprocessing as mp
 
 from phcpy.solver import solve
 from phcpy.solutions import coordinates
-
-# Handle API variations for trackers
-try:
-    from phcpy.trackers import double_track as track
-except ImportError:
-    try:
-        from phcpy.trackers import standard_double_track as track
-    except ImportError:
-        from phcpy.trackers import track
+from phcpy.trackers import double_track as track
 
 # =============================================================================
 # PART 1: SYSTEM SETUP & PARSING (Molzahn 2017, Section II-A)
@@ -43,8 +40,8 @@ def load_case_data(filepath):
     baseMVA = float(base_match.group(1)) if base_match else 100.0
     return baseMVA, parse_matpower_matrix(content, 'bus'), parse_matpower_matrix(content, 'gen'), parse_matpower_matrix(content, 'branch')
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-filepath = os.path.join(script_dir, 'WB5.m')
+filepath = args.file
+print(f"Loading system data from {filepath}...")
 baseMVA, bus_data, gen_data, branch_data = load_case_data(filepath)
 
 bus_data[:, 0] -= 1

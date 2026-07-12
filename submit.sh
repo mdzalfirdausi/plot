@@ -10,17 +10,18 @@
 #SBATCH --time=01:00:00
 
 # =================================================================
-# NEW: Capture the filename from the command line argument ($1)
+# NEW: Capture Python Script ($1) and Data File ($2)
 # =================================================================
-FILENAME=$1
+PYSCRIPT=$1
+DATAFILE=$2
 
-if [ -z "$FILENAME" ]; then
-    echo "Error: No filename provided."
-    echo "Usage: sbatch $0 <filename>"
+if [ -z "$PYSCRIPT" ] || [ -z "$DATAFILE" ]; then
+    echo "Error: Missing arguments."
+    echo "Usage: sbatch $0 <python_script.py> <case_file.m>"
     exit 1
 fi
 
-echo "Processing file: $FILENAME"
+echo "Running script: $PYSCRIPT with data file: $DATAFILE"
 
 # 1. Enter the directory where the sbatch command was executed
 cd $SLURM_SUBMIT_DIR
@@ -47,12 +48,11 @@ export OPENBLAS_NUM_THREADS=1
 
 PYTHON_PATH=$(which python)
 
-# 5. Execute the solver (passing $FILENAME to the python script)
+# 5. Execute the solver
 if command -v numactl &> /dev/null; then
     echo "Running with NUMA memory interleaving enabled using: $PYTHON_PATH"
-    # Assuming your python script uses a flag like --file or positional arguments:
-    numactl --interleave=all "$PYTHON_PATH" run_nphc_wb5.py --file "$FILENAME"
+    numactl --interleave=all "$PYTHON_PATH" "$PYSCRIPT" --file "$DATAFILE"
 else
     echo "numactl not found, running standard python execution..."
-    python run_nphc_wb5.py --file "$FILENAME"
+    python "$PYSCRIPT" --file "$DATAFILE"
 fi
