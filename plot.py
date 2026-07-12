@@ -31,29 +31,64 @@ P_G1_vals, P_G5_vals, Q_G5_vals, cost_vals = P_G1_vals[valid_mask], P_G5_vals[va
 fig = plt.figure(figsize=(13, 10), dpi=150)
 ax = fig.add_subplot(111, projection='3d')
 ax.computed_zorder = False
-# 4. Plot the Continuous Feasible Manifold (The "Ribbon")
-# Using gist_heat_r mimics the paper's thermal gradient (White/Red -> Black)
-sc = ax.scatter(P_G1_vals, P_G5_vals, Q_G5_vals, 
-                c=cost_vals, cmap='gist_heat_r', 
-                s=12,               # Size calibrated for 2,510 points to fuse into a surface
-                alpha=0.65,         # Transparency allows volume structure to be visible
-                edgecolors='none',  # Critical: Removes borders so points blend into a ribbon
-                vmin=np.percentile(cost_vals, 5), vmax=np.percentile(cost_vals, 95))
 
-# 5. Plot the Separating Hyperplane at Q_G5 = -0.30 pu
-# This plane highlights the topological disconnect between the local and global optima
-xx, yy = np.meshgrid(np.linspace(0.5, 3.0, 10), np.linspace(0, 2.0, 10))
+# 4. Plot the Continuous Feasible Manifold (Split into Above/Below for True 3D Slicing)
+vmin_cost = np.percentile(cost_vals, 5)
+vmax_cost = np.percentile(cost_vals, 95)
+
+# Create boolean masks to slice the data at the Q_G5 = -0.30 boundary
+above_mask = Q_G5_vals >= -0.30
+below_mask = ~above_mask
+
+# Layer 1: Submerged bottom belly (drawn UNDER the gray plane)
+ax.scatter(P_G1_vals[below_mask], P_G5_vals[below_mask], Q_G5_vals[below_mask], 
+           c=cost_vals[below_mask], cmap='gist_heat_r', 
+           s=12, alpha=0.45, edgecolors='none', 
+           vmin=vmin_cost, vmax=vmax_cost, zorder=1)
+
+# Layer 2: Separating Hyperplane at Q_G5 = -0.30 pu (drawn OVER the bottom belly)
+xx, yy = np.meshgrid(np.linspace(0.5, 3.5, 10), np.linspace(0.0, 2.5, 10))
 zz = -0.30 * np.ones_like(xx)
-ax.plot_surface(xx, yy, zz, color='lightgray', alpha=1, rstride=1, cstride=1, edgecolor='none')
+ax.plot_surface(xx, yy, zz, color='lightgray', alpha=0.85, rstride=1, cstride=1, edgecolor='none', zorder=2)
 
-# 6. Highlight Benchmark Optima from Molzahn (2017) Table II
-# Global Optimum: P_G1 = 1.81, P_G5 = 2.21, Q_G5 = -0.30 ($1,810/h)
+# Layer 3: Disconnected feasible components above the limit (drawn OVER the gray plane)
+sc = ax.scatter(P_G1_vals[above_mask], P_G5_vals[above_mask], Q_G5_vals[above_mask], 
+                c=cost_vals[above_mask], cmap='gist_heat_r', 
+                s=12, alpha=0.75, edgecolors='none', 
+                vmin=vmin_cost, vmax=vmax_cost, zorder=3)
 
-ax.scatter([1.81], [2.21], [-0.30], color='lime', s=350, marker='*', edgecolors='black', linewidths=1.2, zorder=100, depthshade=False, label='Global Optimal')
+# 6. Highlight Benchmark Optima from Molzahn (2017) Table II (Layer 4: Always on top)
+ax.scatter([1.81], [2.21], [-0.30], color='lime', s=350, marker='*', 
+           edgecolors='black', linewidths=1.2, zorder=100, depthshade=False, 
+           label='Global Optimal')
 
+ax.scatter([2.46], [0.98], [-0.30], color='cyan', s=160, marker='^', 
+           edgecolors='black', linewidths=1.2, zorder=100, depthshade=False, 
+           label='Local Optimal')
 
-# Local Optimum: P_G1 = 2.46, P_G5 = 0.98, Q_G5 = -0.30 (+14.3% higher cost)
-ax.scatter([2.46], [0.98], [-0.30], color='cyan', s=160, marker='^', edgecolors='black', linewidths=1.2, zorder=10, label='Local Optimal')
+# ##################################################################################################################
+# # 4. Plot the Continuous Feasible Manifold (The "Ribbon")
+# # Using gist_heat_r mimics the paper's thermal gradient (White/Red -> Black)
+# sc = ax.scatter(P_G1_vals, P_G5_vals, Q_G5_vals, 
+#                 c=cost_vals, cmap='gist_heat_r', 
+#                 s=12,               # Size calibrated for 2,510 points to fuse into a surface
+#                 alpha=0.65,         # Transparency allows volume structure to be visible
+#                 edgecolors='none',  # Critical: Removes borders so points blend into a ribbon
+#                 vmin=np.percentile(cost_vals, 5), vmax=np.percentile(cost_vals, 95))
+
+# # 5. Plot the Separating Hyperplane at Q_G5 = -0.30 pu
+# # This plane highlights the topological disconnect between the local and global optima
+# xx, yy = np.meshgrid(np.linspace(0.5, 3.0, 10), np.linspace(0, 2.0, 10))
+# zz = -0.30 * np.ones_like(xx)
+# ax.plot_surface(xx, yy, zz, color='lightgray', alpha=1, rstride=1, cstride=1, edgecolor='none')
+
+# # 6. Highlight Benchmark Optima from Molzahn (2017) Table II
+# # Global Optimum: P_G1 = 1.81, P_G5 = 2.21, Q_G5 = -0.30 ($1,810/h)
+# ax.scatter([1.81], [2.21], [-0.30], color='lime', s=350, marker='*', edgecolors='black', linewidths=1.2, zorder=100, depthshade=False, label='Global Optimal')
+# # Local Optimum: P_G1 = 2.46, P_G5 = 0.98, Q_G5 = -0.30 (+14.3% higher cost)
+# ax.scatter([2.46], [0.98], [-0.30], color='cyan', s=160, marker='^', edgecolors='black', linewidths=1.2, zorder=10, label='Local Optimal')
+
+# ##################################################################################################################
 
 # 7. Axes formatting and labels
 cb = plt.colorbar(sc, ax=ax, shrink=0.55, pad=0.08)
