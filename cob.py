@@ -40,7 +40,8 @@ def load_case_data(filepath):
     baseMVA = float(base_match.group(1)) if base_match else 100.0
     return baseMVA, parse_matpower_matrix(content, 'bus'), parse_matpower_matrix(content, 'gen'), parse_matpower_matrix(content, 'branch')
 
-filepath = args.file
+script_dir = os.path.dirname(os.path.abspath(__file__))
+filepath = os.path.join(script_dir, args.file)
 print(f"Loading system data from {filepath}...")
 baseMVA, bus_data, gen_data, branch_data = load_case_data(filepath)
 
