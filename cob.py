@@ -71,7 +71,7 @@ for row in branch_data:
     Ybus[t, f] -= y_s
 
 # =============================================================================
-# PART 2: ULTRA-DENSE TARGETED GRID (Molzahn 2017, Section II-B, Eq 6a-6f)
+# PART 2: HIGH-YIELD TARGETED SLICE (Molzahn 2017, Section III & IV)
 # =============================================================================
 active_gens = gen_data[gen_data[:, 7] == 1]
 p_ranges = active_gens[:, 8] - active_gens[:, 9]
@@ -81,19 +81,18 @@ non_slack_gens = np.delete(active_gens, slack_idx_in_gen, axis=0)
 
 control_names, u_min, u_max = [], [], []
 
-# 1. Target the exact P_G5 bounding box of the disconnected component
+# 1. Active Power: Ultra-high density along the disconnected manifold
 for gen in non_slack_gens:
     bus_id = int(gen[0])
     control_names.append(f"P_G{bus_id+1}")
     u_min.append(0.50)  
     u_max.append(3.50)
 
-# 2. Pin voltages tightly to nominal operating levels (0.98 to 1.02 pu)
-# This stops the grid from wasting 90% of cores on voltage collapse zones!
+# 2. Voltages: Clamped to a micro-band around 1.0 p.u. to prevent Q-limit rejections
 for gen in active_gens:
     control_names.append(f"V_G{int(gen[0])+1}")
-    u_min.append(0.98)  
-    u_max.append(1.02)  
+    u_min.append(0.998)  # Tight micro-bound
+    u_max.append(1.002)  # Tight micro-bound
 
 u_min, u_max = np.array(u_min), np.array(u_max)
 num_controls = len(control_names)
@@ -246,19 +245,17 @@ def evaluate_grid_point(args):
     return None
 
 # =============================================================================
-# PART 4: PROTECTED MASTER EXECUTION BLOCK
+# INSIDE __main__ BLOCK: 1,200 x 3 x 3 = 10,800 High-Yield Coordinates
 # =============================================================================
 if __name__ == '__main__':
-    # 300 steps on P_G5 (ΔP = 0.01 pu), 7 steps on voltages
-    # Total Grid: 300 x 7 x 7 = 14,700 high-yield coordinates!
-    N_res_P, N_res_V = 300, 7
+    N_res_P, N_res_V = 1200, 3  # 1,200 power steps, 3 voltage micro-steps
     d_sweeps = [np.linspace(u_min[i], u_max[i], N_res_P if "P_G" in control_names[i] else N_res_V) for i in range(num_controls)]
     mesh_grids = np.meshgrid(*d_sweeps, indexing='ij')
     candidate_controls = np.vstack([grid.ravel() for grid in mesh_grids]).T
     total_points = len(candidate_controls)
 
     print(f"Loading system data from {filepath}...")
-    print(f"Ribbon Grid complete: {total_points:,} coordinates generated.")
+    print(f"High-Yield Ribbon Grid complete: {total_points:,} coordinates generated.")
 
     num_workers = int(os.environ.get('SLURM_CPUS_PER_TASK', mp.cpu_count()))
     
