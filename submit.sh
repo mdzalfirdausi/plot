@@ -49,10 +49,5 @@ export OPENBLAS_NUM_THREADS=1
 PYTHON_PATH=$(which python)
 
 # 5. Execute the solver
-if command -v numactl &> /dev/null; then
-    echo "Running with NUMA memory interleaving enabled using: $PYTHON_PATH"
-    numactl --interleave=all "$PYTHON_PATH" "$PYSCRIPT" --file "$DATAFILE"
-else
-    echo "numactl not found, running standard python execution..."
-    python "$PYSCRIPT" --file "$DATAFILE"
-fi
+echo "Running standard python execution using: $PYTHON_PATH"
+python "$PYSCRIPT" --file "$DATAFILE"
