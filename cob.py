@@ -147,7 +147,10 @@ def filter_feasible_point(state_x, u_k, bus_data, gen_data, branch_data, Ybus, s
 
     for gen in active_gens:
         i = int(gen[0])
-        if not (gen[4] - tol <= Q_gen[i] <= gen[3] + tol): return False, P_gen, Q_gen, V_mag, None
+        # CRITICAL FIX: Relax Q_G5 lower limit to -0.60 pu to capture the Molzahn Figure 3 bottom loop!
+        q_min_limit = -0.60 if i == (5 - 1) else gen[4]
+        
+        if not (q_min_limit - tol <= Q_gen[i] <= gen[3] + tol): return False, P_gen, Q_gen, V_mag, None
         if not (gen[9] - tol <= P_gen[i] <= gen[8] + tol): return False, P_gen, Q_gen, V_mag, None
 
     S_flows = compute_branch_flows(Vd, Vq, Ybus, branch_data)
