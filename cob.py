@@ -368,7 +368,7 @@ if __name__ == '__main__':
     print(f"  Strictly Feasible OPF Operating Points Found: {len(feasible_points):,}")
     print(f"  Total Infeasible Points Pruned/Discarded: {pruned_count:,}")
 
-    output_filename = "wb5_feasible_points_FINAL.pkl"
+    output_filename = f"wb5_feasible_points_FINAL_{len(feasible_points)}.pkl"
     with open(output_filename, "wb") as f:
         pickle.dump(feasible_points, f)
     print(f"✔ Combined dataset persisted to disk: '{output_filename}'")
