@@ -1,5 +1,6 @@
 """
-cob.py — Replicating Feasible Space Ribbon via Parameter Continuation
+cob.py — Replicating Molzahn (2017) Fig 3 Feasible Space Ribbon
+Fixed: Unpacks double_track tuple & removes complex float warnings.
 """
 import argparse
 import os
@@ -12,8 +13,6 @@ import multiprocessing as mp
 
 from phcpy.solver import solve
 from phcpy.solutions import coordinates
-
-# Correct explicit import for the tracker
 from phcpy.trackers import double_track as track
 
 parser = argparse.ArgumentParser(description="Run NPHC Homotopy Solver.")
@@ -72,7 +71,7 @@ for row in branch_data:
     Ybus[t, f] -= y_s
 
 # =============================================================================
-# PART 2: CONTROL BOUNDS
+# PART 2: CONTROL BOUNDS (Restored full physical voltage range)
 # =============================================================================
 active_gens = gen_data[gen_data[:, 7] == 1]
 p_ranges = active_gens[:, 8] - active_gens[:, 9]
@@ -88,7 +87,6 @@ for gen in non_slack_gens:
     u_min.append(0.50)  
     u_max.append(3.50)
 
-# Restored physical voltage bounds to allow Q_G limits to be satisfied
 for gen in active_gens:
     bus_id = int(gen[0])
     bus_row = bus_data[bus_data[:, 0] == bus_id][0]
@@ -235,12 +233,11 @@ def parse_phcpy_real_roots(raw_solutions, var_names):
 def evaluate_grid_point_cheater(args):
     """Worker uses Parameter Homotopy Tracking"""
     k, u_k, pols_generic, generic_seeds = args
-    
     pols_target, var_names = build_phcpy_system_strings(u_k, bus_data, gen_data, Ybus, slack_bus, active_gens, control_names)
     
-    # STEP 2: Track paths from the generic complex seeds to the target real grid point
     try:
-        target_complex_solutions = track(pols_target, pols_generic, generic_seeds)
+        # CRITICAL FIX: Unpack tuple to separate gamma from solutions list!
+        _, target_complex_solutions = track(pols_target, pols_generic, generic_seeds)
         real_roots = parse_phcpy_real_roots(target_complex_solutions, var_names)
     except Exception:
         return None
@@ -258,8 +255,8 @@ def evaluate_grid_point_cheater(args):
 # PART 4: MASTER EXECUTION BLOCK
 # =============================================================================
 if __name__ == '__main__':
-    # Massive 33,750 point grid. Using track() makes this computationally feasible.
-    N_res_P, N_res_V = 150, 15  
+    # 250 steps on P_G5, 20 steps on voltages = 100,000 High-Density Coordinates!
+    N_res_P, N_res_V = 250, 20  
     d_sweeps = [np.linspace(u_min[i], u_max[i], N_res_P if "P_G" in control_names[i] else N_res_V) for i in range(num_controls)]
     mesh_grids = np.meshgrid(*d_sweeps, indexing='ij')
     candidate_controls = np.vstack([grid.ravel() for grid in mesh_grids]).T
@@ -268,9 +265,10 @@ if __name__ == '__main__':
     print(f"Loading system data from {filepath}...")
     print(f"High-Density Grid complete: {total_points:,} coordinates generated.")
 
-    # STEP 1: GENERATE THE GENERIC START SYSTEM
     print("\n--- PHASE 1: CHEATER'S HOMOTOPY PREPROCESSING ---")
-    u_generic = np.array([u_min[i] + complex(random.random(), random.random()) * (u_max[i] - u_min[i]) for i in range(num_controls)])
+    # CRITICAL FIX: Real random numbers prevent ComplexWarning when casting float()
+    # double_track automatically applies a random complex gamma constant to prevent singularities!
+    u_generic = np.array([u_min[i] + random.random() * (u_max[i] - u_min[i]) for i in range(num_controls)])
     pols_generic, _ = build_phcpy_system_strings(u_generic, bus_data, gen_data, Ybus, slack_bus, active_gens, control_names)
     
     print("Solving generic complex system from scratch. Please wait...")
@@ -286,20 +284,19 @@ if __name__ == '__main__':
     feasible_points = []
     completed_count = 0
 
-    # Package tasks with the generic start system and seeds
     tasks = [(k, u_k, pols_generic, generic_seeds) for k, u_k in enumerate(candidate_controls)]
 
     with mp.Pool(processes=num_workers) as pool:
-        for result in pool.imap_unordered(evaluate_grid_point_cheater, tasks, chunksize=15):
+        for result in pool.imap_unordered(evaluate_grid_point_cheater, tasks, chunksize=20):
             completed_count += 1
             if result is not None:
                 feasible_points.append(result)
                 
-            if completed_count % 1000 == 0 or completed_count == total_points:
+            if completed_count % 2000 == 0 or completed_count == total_points:
                 elapsed_sec = time.time() - start_time
                 rate = completed_count / elapsed_sec
                 est_rem_min = ((total_points - completed_count) / rate) / 60.0
-                print(f"  [Progress {completed_count:5d}/{total_points:,} | {completed_count/total_points*100:5.1f}%] Feasible Total: {len(feasible_points):4d} | Rate: {rate:.1f} pts/sec | ETA: {est_rem_min:.1f} min", flush=True)
+                print(f"  [Progress {completed_count:6d}/{total_points:,} | {completed_count/total_points*100:5.1f}%] Feasible Total: {len(feasible_points):4d} | Rate: {rate:.1f} pts/sec | ETA: {est_rem_min:.1f} min", flush=True)
 
     print(f"\n✔ Parameter Sweep Complete!")
     print(f"  Total Time Elapsed: {(time.time() - start_time)/60:.2f} minutes")
