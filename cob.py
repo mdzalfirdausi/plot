@@ -1,26 +1,27 @@
 """
-cob.py — Replicating Molzahn (2017) Fig 3 Feasible Space Ribbon
-Uses Targeted Asymmetric Discretization & Parameter Continuation.
+cob.py — Replicating Feasible Space Ribbon via Parameter Continuation
 """
 import argparse
-parser = argparse.ArgumentParser(description="Run NPHC Homotopy Solver.")
-parser.add_argument("--file", type=str, required=True, help="Path to MATPOWER file (.m)")
-args = parser.parse_args()
-
 import os
 import re
 import time
+import random
 import pickle
 import numpy as np
-import phcpy
 import multiprocessing as mp
 
 from phcpy.solver import solve
 from phcpy.solutions import coordinates
+
+# Correct explicit import for the tracker
 from phcpy.trackers import double_track as track
 
+parser = argparse.ArgumentParser(description="Run NPHC Homotopy Solver.")
+parser.add_argument("--file", type=str, required=True, help="Path to MATPOWER file (.m)")
+args = parser.parse_args()
+
 # =============================================================================
-# PART 1: SYSTEM SETUP & PARSING (Molzahn 2017, Section II-A)
+# PART 1: SYSTEM SETUP & PARSING
 # =============================================================================
 def parse_matpower_matrix(content, matrix_name):
     pattern = rf'mpc\.{matrix_name}\s*=\s*\[(.*?)\];'
@@ -71,7 +72,7 @@ for row in branch_data:
     Ybus[t, f] -= y_s
 
 # =============================================================================
-# PART 2: HIGH-YIELD TARGETED SLICE (Molzahn 2017, Section III & IV)
+# PART 2: CONTROL BOUNDS
 # =============================================================================
 active_gens = gen_data[gen_data[:, 7] == 1]
 p_ranges = active_gens[:, 8] - active_gens[:, 9]
@@ -81,18 +82,21 @@ non_slack_gens = np.delete(active_gens, slack_idx_in_gen, axis=0)
 
 control_names, u_min, u_max = [], [], []
 
-# 1. Active Power: Ultra-high density along the disconnected manifold
 for gen in non_slack_gens:
     bus_id = int(gen[0])
     control_names.append(f"P_G{bus_id+1}")
     u_min.append(0.50)  
     u_max.append(3.50)
 
-# 2. Voltages: Clamped to a micro-band around 1.0 p.u. to prevent Q-limit rejections
+# Restored physical voltage bounds to allow Q_G limits to be satisfied
 for gen in active_gens:
-    control_names.append(f"V_G{int(gen[0])+1}")
-    u_min.append(0.998)  # Tight micro-bound
-    u_max.append(1.002)  # Tight micro-bound
+    bus_id = int(gen[0])
+    bus_row = bus_data[bus_data[:, 0] == bus_id][0]
+    control_names.append(f"V_G{bus_id+1}")
+    vmin_idx = 12 if len(bus_row) >= 13 else 5
+    vmax_idx = 11 if len(bus_row) >= 13 else 4
+    u_min.append(bus_row[vmin_idx])
+    u_max.append(bus_row[vmax_idx])
 
 u_min, u_max = np.array(u_min), np.array(u_max)
 num_controls = len(control_names)
@@ -228,12 +232,18 @@ def parse_phcpy_real_roots(raw_solutions, var_names):
         except Exception: continue
     return real_roots
 
-def evaluate_grid_point(args):
-    """Independent Worker Function (Li et al. 1989 Cheater's Homotopy)"""
-    k, u_k = args
-    pols, var_names = build_phcpy_system_strings(u_k, bus_data, gen_data, Ybus, slack_bus, active_gens, control_names)
-    raw_complex_solutions = solve(pols)
-    real_roots = parse_phcpy_real_roots(raw_complex_solutions, var_names)
+def evaluate_grid_point_cheater(args):
+    """Worker uses Parameter Homotopy Tracking"""
+    k, u_k, pols_generic, generic_seeds = args
+    
+    pols_target, var_names = build_phcpy_system_strings(u_k, bus_data, gen_data, Ybus, slack_bus, active_gens, control_names)
+    
+    # STEP 2: Track paths from the generic complex seeds to the target real grid point
+    try:
+        target_complex_solutions = track(pols_target, pols_generic, generic_seeds)
+        real_roots = parse_phcpy_real_roots(target_complex_solutions, var_names)
+    except Exception:
+        return None
     
     for sol_x in real_roots:
         is_feas, P_gen, Q_gen, V_mag, S_flows = filter_feasible_point(
@@ -245,43 +255,53 @@ def evaluate_grid_point(args):
     return None
 
 # =============================================================================
-# INSIDE __main__ BLOCK: 1,200 x 3 x 3 = 10,800 High-Yield Coordinates
+# PART 4: MASTER EXECUTION BLOCK
 # =============================================================================
 if __name__ == '__main__':
-    N_res_P, N_res_V = 1200, 3  # 1,200 power steps, 3 voltage micro-steps
+    # Massive 33,750 point grid. Using track() makes this computationally feasible.
+    N_res_P, N_res_V = 150, 15  
     d_sweeps = [np.linspace(u_min[i], u_max[i], N_res_P if "P_G" in control_names[i] else N_res_V) for i in range(num_controls)]
     mesh_grids = np.meshgrid(*d_sweeps, indexing='ij')
     candidate_controls = np.vstack([grid.ravel() for grid in mesh_grids]).T
     total_points = len(candidate_controls)
 
     print(f"Loading system data from {filepath}...")
-    print(f"High-Yield Ribbon Grid complete: {total_points:,} coordinates generated.")
+    print(f"High-Density Grid complete: {total_points:,} coordinates generated.")
+
+    # STEP 1: GENERATE THE GENERIC START SYSTEM
+    print("\n--- PHASE 1: CHEATER'S HOMOTOPY PREPROCESSING ---")
+    u_generic = np.array([u_min[i] + complex(random.random(), random.random()) * (u_max[i] - u_min[i]) for i in range(num_controls)])
+    pols_generic, _ = build_phcpy_system_strings(u_generic, bus_data, gen_data, Ybus, slack_bus, active_gens, control_names)
+    
+    print("Solving generic complex system from scratch. Please wait...")
+    generic_seeds = solve(pols_generic)
+    num_seeds = len(generic_seeds) if generic_seeds else 0
+    print(f"✔ Generic Start System Solved! Found {num_seeds} valid generic seed paths to track.")
 
     num_workers = int(os.environ.get('SLURM_CPUS_PER_TASK', mp.cpu_count()))
-    
-    print(f"\n[Auto-Scale Engine] Initializing sweep across {total_points:,} coordinates...")
-    print(f"[Auto-Scale Engine] Detected {num_workers} CPU cores. Spawning parallel process pool...")
+    print(f"\n[Auto-Scale Engine] Spawning {num_workers} parallel workers for parameter sweep...")
     print(f"Time started: {time.strftime('%X')}\n")
 
     start_time = time.time()
     feasible_points = []
     completed_count = 0
 
-    tasks = [(k, u_k) for k, u_k in enumerate(candidate_controls)]
+    # Package tasks with the generic start system and seeds
+    tasks = [(k, u_k, pols_generic, generic_seeds) for k, u_k in enumerate(candidate_controls)]
 
     with mp.Pool(processes=num_workers) as pool:
-        for result in pool.imap_unordered(evaluate_grid_point, tasks, chunksize=10):
+        for result in pool.imap_unordered(evaluate_grid_point_cheater, tasks, chunksize=15):
             completed_count += 1
             if result is not None:
                 feasible_points.append(result)
                 
-            if completed_count % 500 == 0 or completed_count == total_points:
+            if completed_count % 1000 == 0 or completed_count == total_points:
                 elapsed_sec = time.time() - start_time
                 rate = completed_count / elapsed_sec
                 est_rem_min = ((total_points - completed_count) / rate) / 60.0
                 print(f"  [Progress {completed_count:5d}/{total_points:,} | {completed_count/total_points*100:5.1f}%] Feasible Total: {len(feasible_points):4d} | Rate: {rate:.1f} pts/sec | ETA: {est_rem_min:.1f} min", flush=True)
 
-    print(f"\n✔ Auto-Scaling Production Sweep Complete!")
+    print(f"\n✔ Parameter Sweep Complete!")
     print(f"  Total Time Elapsed: {(time.time() - start_time)/60:.2f} minutes")
     print(f"  Strictly Feasible OPF Operating Points Found: {len(feasible_points):,}")
 
