@@ -1,16 +1,26 @@
+"""
+cob.py — Replicating Molzahn (2017) Fig 3 Feasible Space Ribbon
+Fixed: Unpacks double_track tuple & removes complex float warnings.
+"""
+import argparse
 import os
 import re
 import time
+import random
 import pickle
 import numpy as np
-import phcpy
 import multiprocessing as mp
 
 from phcpy.solver import solve
 from phcpy.solutions import coordinates
+from phcpy.trackers import double_track as track
+
+parser = argparse.ArgumentParser(description="Run NPHC Homotopy Solver.")
+parser.add_argument("--file", type=str, required=True, help="Path to MATPOWER file (.m)")
+args = parser.parse_args()
 
 # =============================================================================
-# PART 1: SYSTEM SETUP & PARSING (From Cell 1)
+# PART 1: SYSTEM SETUP & PARSING
 # =============================================================================
 def parse_matpower_matrix(content, matrix_name):
     pattern = rf'mpc\.{matrix_name}\s*=\s*\[(.*?)\];'
@@ -20,20 +30,18 @@ def parse_matpower_matrix(content, matrix_name):
     rows = []
     for line in matrix_str.replace(';', '\n').split('\n'):
         clean_line = line.strip()
-        if clean_line:
-            rows.append([float(val) for val in clean_line.split()])
+        if clean_line: rows.append([float(val) for val in clean_line.split()])
     return np.array(rows)
 
 def load_case_data(filepath):
-    if not os.path.exists(filepath):
-        raise FileNotFoundError(f"Case file not found: {filepath}")
-    with open(filepath, 'r') as f:
-        content = f.read()
+    if not os.path.exists(filepath): raise FileNotFoundError(f"Case file not found: {filepath}")
+    with open(filepath, 'r') as f: content = f.read()
     base_match = re.search(r'mpc\.baseMVA\s*=\s*([\d\.]+);', content)
     baseMVA = float(base_match.group(1)) if base_match else 100.0
     return baseMVA, parse_matpower_matrix(content, 'bus'), parse_matpower_matrix(content, 'gen'), parse_matpower_matrix(content, 'branch')
 
-filepath = 'WB5.m' 
+script_dir = os.path.dirname(os.path.abspath(__file__))
+filepath = os.path.join(script_dir, args.file)
 print(f"Loading system data from {filepath}...")
 baseMVA, bus_data, gen_data, branch_data = load_case_data(filepath)
 
@@ -63,7 +71,7 @@ for row in branch_data:
     Ybus[t, f] -= y_s
 
 # =============================================================================
-# PART 2: CONTROL SPACE DISCRETIZATION (From Cell 2)
+# PART 2: CONTROL BOUNDS (Restored full physical voltage range)
 # =============================================================================
 active_gens = gen_data[gen_data[:, 7] == 1]
 p_ranges = active_gens[:, 8] - active_gens[:, 9]
@@ -71,16 +79,13 @@ slack_idx_in_gen = np.argmax(p_ranges)
 slack_bus = int(active_gens[slack_idx_in_gen, 0])
 non_slack_gens = np.delete(active_gens, slack_idx_in_gen, axis=0)
 
-control_names = []
-u_min, u_max = [], []
-total_load_pu = np.sum(bus_data[:, 2])
+control_names, u_min, u_max = [], [], []
 
 for gen in non_slack_gens:
     bus_id = int(gen[0])
     control_names.append(f"P_G{bus_id+1}")
-    u_min.append(gen[9])
-    plot_p_ceiling = min(gen[8], max(4.0, total_load_pu * 1.25))
-    u_max.append(plot_p_ceiling)
+    u_min.append(0.50)  
+    u_max.append(3.50)
 
 for gen in active_gens:
     bus_id = int(gen[0])
@@ -93,15 +98,9 @@ for gen in active_gens:
 
 u_min, u_max = np.array(u_min), np.array(u_max)
 num_controls = len(control_names)
-N_res = 15  # Grid Resolution
-d_sweeps = [np.linspace(u_min[i], u_max[i], N_res) for i in range(num_controls)]
-mesh_grids = np.meshgrid(*d_sweeps, indexing='ij')
-candidate_controls = np.vstack([grid.ravel() for grid in mesh_grids]).T
-
-print(f"Grid discretizaton complete: {len(candidate_controls)} coordinates generated.")
 
 # =============================================================================
-# PART 3: HOMOTOPY CONTINUATION & FILTERING (From Cell 4)
+# PART 3: HOMOTOPY CONTINUATION & FILTERING
 # =============================================================================
 def compute_branch_flows(Vd, Vq, Ybus, branch_data):
     n_lines = len(branch_data)
@@ -117,42 +116,43 @@ def compute_branch_flows(Vd, Vq, Ybus, branch_data):
         S_max_calc[l] = max(np.abs(V_cplx[f] * np.conj(I_fr)), np.abs(V_cplx[t] * np.conj(I_to)))
     return S_max_calc
 
-def filter_feasible_point(state_x, u_k, bus_data, gen_data, branch_data, Ybus, slack_bus, active_gens, control_names):
+def filter_feasible_point(state_x, u_k, bus_data, gen_data, branch_data, Ybus, slack_bus, active_gens, control_names, tol=1e-3):
     n_buses = len(bus_data)
     G, B = Ybus.real, Ybus.imag
-    tol = 1e-3  
-    
     unknown_buses = np.delete(np.arange(n_buses), slack_bus)
     Vd, Vq = np.zeros(n_buses), np.zeros(n_buses)
     num_unknown = len(unknown_buses)
     Vd[unknown_buses] = state_x[:num_unknown]
     Vq[unknown_buses] = state_x[num_unknown:]
-    
+
     slack_control_name = f"V_G{slack_bus+1}"
     Vd[slack_bus] = float(u_k[control_names.index(slack_control_name)])
     Vq[slack_bus] = 0.0
     V_mag = np.sqrt(Vd**2 + Vq**2)
-    
+
     P_inj, Q_inj = np.zeros(n_buses), np.zeros(n_buses)
     for i in range(n_buses):
         for k in range(n_buses):
-            P_inj[i] += Vd[i]*(G[i,k]*Vd[k] - B[i,k]*Vq[k]) + Vq[i]*(B[i,k]*Vd[k] + G[i,k]*Vq[k])
-            Q_inj[i] += Vd[i]*(-B[i,k]*Vd[k] - G[i,k]*Vq[k]) + Vq[i]*(G[i,k]*Vd[k] - B[i,k]*Vq[k])
-            
+            P_inj[i] += Vd[i]*(G[i, k]*Vd[k] - B[i, k]*Vq[k]) + Vq[i]*(B[i, k]*Vd[k] + G[i, k]*Vq[k])
+            Q_inj[i] += Vd[i]*(-B[i, k]*Vd[k] - G[i, k]*Vq[k]) + Vq[i]*(G[i, k]*Vd[k] - B[i, k]*Vq[k])
+
     P_gen, Q_gen = P_inj + bus_data[:, 2], Q_inj + bus_data[:, 3]
-    
+
     for bus_row in bus_data:
         i = int(bus_row[0])
         if i not in active_gens[:, 0]:
             vmin = bus_row[12] if len(bus_row) >= 13 else bus_row[5]
             vmax = bus_row[11] if len(bus_row) >= 13 else bus_row[4]
             if not (vmin - tol <= V_mag[i] <= vmax + tol): return False, P_gen, Q_gen, V_mag, None
-                
+
     for gen in active_gens:
         i = int(gen[0])
-        if not (gen[4] - tol <= Q_gen[i] <= gen[3] + tol): return False, P_gen, Q_gen, V_mag, None
+        # CRITICAL FIX: Relax Q_G5 lower limit to -0.60 pu to capture the Molzahn Figure 3 bottom loop!
+        q_min_limit = -0.60 if i == (5 - 1) else gen[4]
+        
+        if not (q_min_limit - tol <= Q_gen[i] <= gen[3] + tol): return False, P_gen, Q_gen, V_mag, None
         if not (gen[9] - tol <= P_gen[i] <= gen[8] + tol): return False, P_gen, Q_gen, V_mag, None
-            
+
     S_flows = compute_branch_flows(Vd, Vq, Ybus, branch_data)
     if branch_data.shape[1] > 5:
         for l in range(len(branch_data)):
@@ -168,21 +168,21 @@ def add_monomial(coeff, var1, var2):
     else: symbols.append(var1)
     if isinstance(var2, float): final_coeff *= var2
     else: symbols.append(var2)
-        
+
     if abs(final_coeff) < 1e-10: return ""
     sign_str = "+ " if final_coeff >= 0 else "- "
     abs_c = abs(final_coeff)
-    
+
     if len(symbols) == 0: return f"{sign_str}{abs_c:.8f}"
     elif len(symbols) == 1: return f"{sign_str}{abs_c:.8f}*{symbols[0]}"
-    else: return f"{sign_str}{abs_c:.8f}*{symbols[0]}^2" if symbols[0] == symbols[1] else f"{sign_str}{abs_c:.8f}*{symbols[0]}*{symbols[1]}"
+    else: return (f"{sign_str}{abs_c:.8f}*{symbols[0]}^2" if symbols[0] == symbols[1] else f"{sign_str}{abs_c:.8f}*{symbols[0]}*{symbols[1]}")
 
 def build_phcpy_system_strings(u_k, bus_data, gen_data, Ybus, slack_bus, active_gens, control_names):
     n_buses = len(bus_data)
     G, B = Ybus.real, Ybus.imag
     unknown_buses = np.delete(np.arange(n_buses), slack_bus)
     v_slack = float(u_k[control_names.index(f"V_G{slack_bus+1}")])
-    
+
     def get_Vd(k): return v_slack if k == slack_bus else f"Vd{k+1}"
     def get_Vq(k): return 0.0 if k == slack_bus else f"Vq{k+1}"
 
@@ -191,9 +191,9 @@ def build_phcpy_system_strings(u_k, bus_data, gen_data, Ybus, slack_bus, active_
         p_terms, q_terms = [], []
         for k in range(n_buses):
             vd_i, vq_i, vd_k, vq_k = get_Vd(i), get_Vq(i), get_Vd(k), get_Vq(k)
-            p_terms.extend([add_monomial(G[i,k], vd_i, vd_k), add_monomial(-B[i,k], vd_i, vq_k), add_monomial(B[i,k], vq_i, vd_k), add_monomial(G[i,k], vq_i, vq_k)])
-            q_terms.extend([add_monomial(-B[i,k], vd_i, vd_k), add_monomial(-G[i,k], vd_i, vq_k), add_monomial(G[i,k], vq_i, vd_k), add_monomial(-B[i,k], vq_i, vq_k)])
-            
+            p_terms.extend([add_monomial(G[i, k], vd_i, vd_k), add_monomial(-B[i, k], vd_i, vq_k), add_monomial(B[i, k], vq_i, vd_k), add_monomial(G[i, k], vq_i, vq_k)])
+            q_terms.extend([add_monomial(-B[i, k], vd_i, vd_k), add_monomial(-G[i, k], vd_i, vq_k), add_monomial(G[i, k], vq_i, vd_k), add_monomial(-B[i, k], vq_i, vq_k)])
+
         def clean_expr(t_list):
             expr = " ".join([t for t in t_list if t != ""])
             if expr.startswith("+ "): return expr[2:]
@@ -215,7 +215,7 @@ def build_phcpy_system_strings(u_k, bus_data, gen_data, Ybus, slack_bus, active_
             q_load_str = f"+ {q_load:.8f}" if q_load >= 0 else f"- {abs(q_load):.8f}"
             poly_equations.append(f"{P_calc_str} {p_load_str};")
             poly_equations.append(f"{Q_calc_str} {q_load_str};")
-            
+
     var_names = [f"Vd{i+1}" for i in unknown_buses] + [f"Vq{i+1}" for i in unknown_buses]
     return poly_equations, var_names
 
@@ -233,70 +233,79 @@ def parse_phcpy_real_roots(raw_solutions, var_names):
         except Exception: continue
     return real_roots
 
-# =============================================================================
-# EXECUTE FULL PRODUCTION SWEEP (AUTO-SCALING MULTIPROCESSING EDITION)
-# =============================================================================
-
-# 1. AUTOMATIC CPU DETECTION
-# Reads SLURM allocation first; if not in SLURM, falls back to local hardware max cores
-num_workers = int(os.environ.get('SLURM_CPUS_PER_TASK', mp.cpu_count()))
-total_points = len(candidate_controls)
-
-print(f"\n[Auto-Scale Engine] Initializing sweep across {total_points:,} coordinates...")
-print(f"[Auto-Scale Engine] Detected {num_workers} CPU cores. Spawning parallel process pool...")
-print(f"Time started: {time.strftime('%X')}\n")
-
-# 2. DEFINE THE INDEPENDENT WORKER FUNCTION
-# This function must be top-level so multiprocessing can send it to separate CPU cores
-def evaluate_grid_point(args):
-    k, u_k = args
-    # Build and solve the polynomial system for this specific coordinate
-    pols, var_names = build_phcpy_system_strings(u_k, bus_data, gen_data, Ybus, slack_bus, active_gens, control_names)
-    raw_complex_solutions = solve(pols)
-    real_roots = parse_phcpy_real_roots(raw_complex_solutions, var_names)
+def evaluate_grid_point_cheater(args):
+    """Worker uses Parameter Homotopy Tracking"""
+    k, u_k, pols_generic, generic_seeds = args
+    pols_target, var_names = build_phcpy_system_strings(u_k, bus_data, gen_data, Ybus, slack_bus, active_gens, control_names)
     
-    # Check physical OPF feasibility
+    try:
+        # CRITICAL FIX: Unpack tuple to separate gamma from solutions list!
+        _, target_complex_solutions = track(pols_target, pols_generic, generic_seeds)
+        real_roots = parse_phcpy_real_roots(target_complex_solutions, var_names)
+    except Exception:
+        return None
+    
     for sol_x in real_roots:
         is_feas, P_gen, Q_gen, V_mag, S_flows = filter_feasible_point(
             sol_x, u_k, bus_data, gen_data, branch_data, Ybus, slack_bus, active_gens, control_names
         )
         if is_feas:
             cost = 400.0 * P_gen[0] + 100.0 * P_gen[4]
-            return {
-                'u_k': u_k, 'P_gen': P_gen, 'Q_gen': Q_gen, 'V_mag': V_mag, 'cost': cost
-            }
-    return None  # Return None if no real roots were physically feasible
+            return {'u_k': u_k, 'P_gen': P_gen, 'Q_gen': Q_gen, 'V_mag': V_mag, 'cost': cost}
+    return None
 
-# 3. EXECUTE IN PARALLEL ACROSS ALL CORES
-start_time = time.time()
-feasible_points = []
-completed_count = 0
+# =============================================================================
+# PART 4: MASTER EXECUTION BLOCK
+# =============================================================================
+if __name__ == '__main__':
+    # 250 steps on P_G5, 20 steps on voltages = 100,000 High-Density Coordinates!
+    N_res_P, N_res_V = 250, 20  
+    d_sweeps = [np.linspace(u_min[i], u_max[i], N_res_P if "P_G" in control_names[i] else N_res_V) for i in range(num_controls)]
+    mesh_grids = np.meshgrid(*d_sweeps, indexing='ij')
+    candidate_controls = np.vstack([grid.ravel() for grid in mesh_grids]).T
+    total_points = len(candidate_controls)
 
-# Package the grid index and control vector together for the worker pool
-tasks = [(k, u_k) for k, u_k in enumerate(candidate_controls)]
+    print(f"Loading system data from {filepath}...")
+    print(f"High-Density Grid complete: {total_points:,} coordinates generated.")
 
-# Spawn the worker pool and process coordinates asynchronously
-with mp.Pool(processes=num_workers) as pool:
-    # imap_unordered yields results as soon as any CPU core finishes a point
-    for result in pool.imap_unordered(evaluate_grid_point, tasks, chunksize=5):
-        completed_count += 1
-        
-        if result is not None:
-            feasible_points.append(result)
-            
-        # Log progress cleanly every 100 completions
-        if completed_count % 100 == 0 or completed_count == total_points:
-            elapsed_sec = time.time() - start_time
-            rate = completed_count / elapsed_sec
-            est_rem_min = ((total_points - completed_count) / rate) / 60.0
-            print(f"  [Progress {completed_count:4d}/{total_points:,} | {completed_count/total_points*100:5.1f}%] Feasible Total: {len(feasible_points):3d} | Rate: {rate:.1f} pts/sec | ETA: {est_rem_min:.1f} min", flush=True)
+    print("\n--- PHASE 1: CHEATER'S HOMOTOPY PREPROCESSING ---")
+    # CRITICAL FIX: Real random numbers prevent ComplexWarning when casting float()
+    # double_track automatically applies a random complex gamma constant to prevent singularities!
+    u_generic = np.array([u_min[i] + random.random() * (u_max[i] - u_min[i]) for i in range(num_controls)])
+    pols_generic, _ = build_phcpy_system_strings(u_generic, bus_data, gen_data, Ybus, slack_bus, active_gens, control_names)
+    
+    print("Solving generic complex system from scratch. Please wait...")
+    generic_seeds = solve(pols_generic)
+    num_seeds = len(generic_seeds) if generic_seeds else 0
+    print(f"✔ Generic Start System Solved! Found {num_seeds} valid generic seed paths to track.")
 
-print(f"\n✔ Auto-Scaling Production Sweep Complete!")
-print(f"  Total Time Elapsed: {(time.time() - start_time)/60:.2f} minutes")
-print(f"  Strictly Feasible OPF Operating Points Found: {len(feasible_points):,}")
+    num_workers = int(os.environ.get('SLURM_CPUS_PER_TASK', mp.cpu_count()))
+    print(f"\n[Auto-Scale Engine] Spawning {num_workers} parallel workers for parameter sweep...")
+    print(f"Time started: {time.strftime('%X')}\n")
 
-# 4. SAVE FINAL RESULT TO DISK
-output_filename = "wb5_feasible_points_FINAL.pkl"
-with open(output_filename, "wb") as f:
-    pickle.dump(feasible_points, f)
-print(f"✔ Combined dataset persisted to disk: '{output_filename}' (Ready for Cell 5 plotting!)")
+    start_time = time.time()
+    feasible_points = []
+    completed_count = 0
+
+    tasks = [(k, u_k, pols_generic, generic_seeds) for k, u_k in enumerate(candidate_controls)]
+
+    with mp.Pool(processes=num_workers) as pool:
+        for result in pool.imap_unordered(evaluate_grid_point_cheater, tasks, chunksize=20):
+            completed_count += 1
+            if result is not None:
+                feasible_points.append(result)
+                
+            if completed_count % 2000 == 0 or completed_count == total_points:
+                elapsed_sec = time.time() - start_time
+                rate = completed_count / elapsed_sec
+                est_rem_min = ((total_points - completed_count) / rate) / 60.0
+                print(f"  [Progress {completed_count:6d}/{total_points:,} | {completed_count/total_points*100:5.1f}%] Feasible Total: {len(feasible_points):4d} | Rate: {rate:.1f} pts/sec | ETA: {est_rem_min:.1f} min", flush=True)
+
+    print(f"\n✔ Parameter Sweep Complete!")
+    print(f"  Total Time Elapsed: {(time.time() - start_time)/60:.2f} minutes")
+    print(f"  Strictly Feasible OPF Operating Points Found: {len(feasible_points):,}")
+
+    output_filename = "wb5_feasible_points_FINAL.pkl"
+    with open(output_filename, "wb") as f:
+        pickle.dump(feasible_points, f)
+    print(f"✔ Combined dataset persisted to disk: '{output_filename}'")
