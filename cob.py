@@ -189,8 +189,7 @@ def filter_feasible_point(state_x, u_k, bus_data, gen_data, branch_data, Ybus, s
 
     # 4. Generator Bounds Check (Allow Bus 5 to reach -0.60 pu)
     for gen in active_gens:
-        bus_id = int(gen[0])      # 1-based MATPOWER bus ID
-        idx = bus_id - 1          # 0-based Python array index
+        idx = int(gen[0])  
         
         q_max = float(gen[3])
         
