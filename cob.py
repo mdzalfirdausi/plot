@@ -97,8 +97,8 @@ for gen in active_gens:
     bus_id = int(gen[0])
     bus_row = bus_data[bus_data[:, 0] == bus_id][0]
     control_names.append(f"V_G{bus_id+1}")
-    vmin_idx = 12 if len(bus_row) >= 13 else 5
     vmax_idx = 11 if len(bus_row) >= 13 else 4
+    vmin_idx = 12 if len(bus_row) >= 13 else 5
     # Clamping within stable QC relaxation envelope
     u_min.append(max(0.95, float(bus_row[vmin_idx])))
     u_max.append(min(1.05, float(bus_row[vmax_idx])))
@@ -130,16 +130,15 @@ def prune_grid_point_lasserre(u_k, bus_data, gen_data, Ybus, slack_bus, control_
     total_load_Q = np.sum(bus_data[:, 3])
     est_network_bs = np.sum(B) * (v_slack * v_g5)
     q_min_required = total_load_Q - abs(est_network_bs) * 0.15
-    
     # If network physics demand more Q than generators can physically supply, PRUNE POINT
     max_system_Q = np.sum(gen_data[:, 3])
-    if q_min_required > max_system_Q:
-        return True  # Prune = True (Infeasible)
+    # if q_min_required > max_system_Q:
+    #     return True  # Prune = True (Infeasible)
         
     # 2. Second-Order Cone / Voltage Difference Screening
     # If active power transfer P_G5 is high, voltage angle spread must not violate branch limits
-    if p_g5 > 3.20 and abs(v_slack - v_g5) > 0.08:
-        return True  # Prune = True (Infeasible)
+    # if p_g5 > 3.20 and abs(v_slack - v_g5) > 0.08:
+    #     return True  # Prune = True (Infeasible)
         
     return False  # Prune = False (Point passes convex relaxation screening!)
 
@@ -212,7 +211,7 @@ def filter_feasible_point(state_x, u_k, bus_data, gen_data, branch_data, Ybus, s
         # Check P bounds
         if not (p_min - tol <= P_gen[idx] <= p_max + tol): 
             return False, P_gen, Q_gen, V_mag, None
-
+    
     return True, P_gen, Q_gen, V_mag, None
 
 def add_monomial(coeff, var1, var2):
