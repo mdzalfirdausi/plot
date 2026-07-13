@@ -103,4 +103,4 @@ output_img = f"{input_filename}.png"
 plt.savefig(output_img, dpi=300, bbox_inches='tight')
 print(f"✔ High-resolution plot saved as '{output_img}'!")
 
-# plt.show()
+plt.show()
