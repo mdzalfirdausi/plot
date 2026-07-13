@@ -178,26 +178,26 @@ def filter_feasible_point(state_x, u_k, bus_data, gen_data, branch_data, Ybus, s
 
     P_gen, Q_gen = P_inj + bus_data[:, 2], Q_inj + bus_data[:, 3]
 
-    # 3. Load Bus Voltage Bounds Check (Relaxed to allow continuation tracking across the manifold)
+    # 3. Load Bus Voltage Bounds Check (Relaxed envelope during generation to allow the U-bend to form)
     for bus_row in bus_data:
         idx = int(bus_row[0])       # Already 0-based from global subtraction
         
         if idx not in active_gens[:, 0]:
-            # Relaxing load bus envelope to [0.88, 1.12] prevents intermediate voltage sag from clipping the horns
+            # Permitting 0.88 pu allows the solver to track through the deep reactive valley
             if not (0.88 <= V_mag[idx] <= 1.12): 
                 return False, P_gen, Q_gen, V_mag, None
 
-    # 4. Generator Bounds Check (Strictly enforce mpc.gen physical limits)
+    # 4. Generator Bounds Check (Allow Bus 5 to reach -0.60 pu)
     for gen in active_gens:
         bus_id = int(gen[0])      # 1-based MATPOWER bus ID
         idx = bus_id - 1          # 0-based Python array index
         
-        q_max = float(gen[3])     # Col 4: Qmax (18.0 pu)
+        q_max = float(gen[3])
         
-        # NOTE: To visualize the submerged connecting belly that gets sliced by the gray plane,
-        # set q_min to -0.60 pu for Bus 5 during tracking. If you use strict -0.30 here, 
-        # the points below the gray plane will not be saved for Matplotlib to draw underneath!
+        # --- CRITICAL BOUND ENLARGEMENT ---
+        # Forces Bus 5 to track all the way down to -0.60 pu so the bottom loop is saved
         q_min = -0.60 if idx == 4 else float(gen[4])
+        # ----------------------------------
         
         p_max = float(gen[8])
         p_min = float(gen[9])
