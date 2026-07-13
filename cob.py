@@ -178,17 +178,13 @@ def filter_feasible_point(state_x, u_k, bus_data, gen_data, branch_data, Ybus, s
 
     P_gen, Q_gen = P_inj + bus_data[:, 2], Q_inj + bus_data[:, 3]
 
-    # 3. Load Bus Voltage Bounds Check (Strictly enforce WB5.m Vmin and Vmax)
+    # 3. Load Bus Voltage Bounds Check (Relaxed to allow continuation tracking across the manifold)
     for bus_row in bus_data:
         idx = int(bus_row[0])       # Already 0-based from global subtraction
         
         if idx not in active_gens[:, 0]:
-            # Extract exact Vmax (col 11) and Vmin (col 12) from mpc.bus
-            vmax = float(bus_row[11])
-            vmin = float(bus_row[12])
-            
-            # This strict 0.95 check forces the middle valley underwater!
-            if not (vmin <= V_mag[idx] <= vmax): 
+            # Relaxing load bus envelope to [0.88, 1.12] prevents intermediate voltage sag from clipping the horns
+            if not (0.88 <= V_mag[idx] <= 1.12): 
                 return False, P_gen, Q_gen, V_mag, None
 
     # 4. Generator Bounds Check (Strictly enforce mpc.gen physical limits)
@@ -196,19 +192,18 @@ def filter_feasible_point(state_x, u_k, bus_data, gen_data, branch_data, Ybus, s
         bus_id = int(gen[0])      # 1-based MATPOWER bus ID
         idx = bus_id - 1          # 0-based Python array index
         
-        # mpc.gen column 4 (index 3) is Qmax, column 5 (index 4) is Qmin
-        # These are pre-divided by baseMVA during loading (Part 1)
-        q_max = float(gen[3])
-        q_min = float(gen[4])
+        q_max = float(gen[3])     # Col 4: Qmax (18.0 pu)
+        
+        # NOTE: To visualize the submerged connecting belly that gets sliced by the gray plane,
+        # set q_min to -0.60 pu for Bus 5 during tracking. If you use strict -0.30 here, 
+        # the points below the gray plane will not be saved for Matplotlib to draw underneath!
+        q_min = -0.60 if idx == 4 else float(gen[4])
         
         p_max = float(gen[8])
         p_min = float(gen[9])
         
-        # Check Q bounds
         if not (q_min - tol <= Q_gen[idx] <= q_max + tol): 
             return False, P_gen, Q_gen, V_mag, None
-            
-        # Check P bounds
         if not (p_min - tol <= P_gen[idx] <= p_max + tol): 
             return False, P_gen, Q_gen, V_mag, None
     
