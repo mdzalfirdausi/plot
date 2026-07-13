@@ -88,8 +88,9 @@ total_load_P = np.sum(bus_data[:, 2])
 for gen in non_slack_gens:
     bus_id = int(gen[0])
     control_names.append(f"P_G{bus_id+1}")
-    # Tightened bound: cannot exceed total system capacity or drop below stable minimum
-    u_min.append(max(0.50, float(gen[9])))  
+    
+    # Allow P_G5 to sweep down to -0.50 pu so the high-Q tip of the horn is evaluated
+    u_min.append(-0.50)  
     u_max.append(min(3.50, float(gen[8])))
 
 # 2. Tighten Voltage Magnitude Bounds using nodal voltage difference constraints
@@ -187,19 +188,17 @@ def filter_feasible_point(state_x, u_k, bus_data, gen_data, branch_data, Ybus, s
             if not (0.88 <= V_mag[idx] <= 1.12): 
                 return False, P_gen, Q_gen, V_mag, None
 
-    # 4. Generator Bounds Check (Allow Bus 5 to reach -0.60 pu)
+    # In Section 4: Generator Bounds Check
     for gen in active_gens:
-        idx = int(gen[0])  
+        idx = int(gen[0])         # Already 0-based from global subtraction!
         
         q_max = float(gen[3])
-        
-        # --- CRITICAL BOUND ENLARGEMENT ---
-        # Forces Bus 5 to track all the way down to -0.60 pu so the bottom loop is saved
         q_min = -0.60 if idx == 4 else float(gen[4])
-        # ----------------------------------
         
         p_max = float(gen[8])
-        p_min = float(gen[9])
+        
+        # Allow Bus 5 (idx == 4) active power to reach -0.50 pu during visualization
+        p_min = -0.50 if idx == 4 else float(gen[9])
         
         if not (q_min - tol <= Q_gen[idx] <= q_max + tol): 
             return False, P_gen, Q_gen, V_mag, None
