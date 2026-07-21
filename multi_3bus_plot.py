@@ -4,7 +4,7 @@ import matplotlib.ticker as ticker
 import numpy as np
 
 # ==========================================
-# CELL: All 20 Unique 3D Projections (6C3 in a 5x4 Grid)
+# CELL: All 20 Unique 3D Projections with 2D Wall Shadows (6C3 in a 5x4 Grid)
 # ==========================================
 
 # 1. Parameter Calibration for the Hiskens & Davy [100] 3-Bus System
@@ -43,6 +43,16 @@ variables = {
     "$Q_{G3}$ (pu)": Q3,
 }
 
+# Define the exact back-wall boundary positions for each variable
+wall_limits = {
+    "$P_{G1}$ (pu)": -2.0,
+    "$Q_{G1}$ (pu)": -0.5,
+    "$P_{G2}$ (pu)": -2.0,
+    "$Q_{G2}$ (pu)": -0.5,
+    "$P_{G3}$ (pu)": -2.0,
+    "$Q_{G3}$ (pu)": -0.5,
+}
+
 # Generate all 6C3 = 20 unique triplets of (X, Y, Z) variables
 combinations = list(itertools.combinations(variables.keys(), 3))
 
@@ -60,14 +70,14 @@ def clean_ticks(x, pos):
     return f"{x:.1f}"
 
 
-# 4. Loop Through All 20 Triplets and Render 3D Surfaces
+# 4. Loop Through All 20 Triplets and Render 3D Surfaces + 2D Shadows
 for i, (label_x, label_y, label_z) in enumerate(combinations):
     ax = axes_flat[i]
     X_data = variables[label_x]
     Y_data = variables[label_y]
     Z_data = variables[label_z]
 
-    # Plot 3D surface manifold for this exact variable triplet
+    # --- Plot Primary 3D Manifold ---
     surf = ax.plot_surface(
         X_data,
         Y_data,
@@ -79,6 +89,31 @@ for i, (label_x, label_y, label_z) in enumerate(combinations):
         antialiased=True,
         rstride=6,  # Stride of 6 keeps 20 simultaneous 3D subplots responsive & fast
         cstride=6,
+    )
+
+    # --- Plot 2D Wall Shadow Projections ---
+    # 1. Shadow on the left wall (Y locked at its minimum boundary limit)
+    ax.plot_wireframe(
+        X_data,
+        np.full_like(Y_data, wall_limits[label_y]),
+        Z_data,
+        color="k",
+        linewidth=0.25,
+        alpha=0.25,
+        rstride=8,  # Slightly sparser stride for shadows keeps CPU rendering fast
+        cstride=8,
+    )
+
+    # 2. Shadow on the back wall (X locked at its minimum boundary limit)
+    ax.plot_wireframe(
+        np.full_like(X_data, wall_limits[label_x]),
+        Y_data,
+        Z_data,
+        color="k",
+        linewidth=0.25,
+        alpha=0.25,
+        rstride=8,
+        cstride=8,
     )
 
     # Set consistent 3D viewing angle
@@ -93,15 +128,20 @@ for i, (label_x, label_y, label_z) in enumerate(combinations):
     ax.set_ylabel(label_y, fontsize=10, labelpad=4)
     ax.set_zlabel(label_z, fontsize=10, labelpad=2)
 
-# 5. Global Formatting and Export
-cbar = fig.colorbar(
-    surf, ax=axes, orientation="horizontal", shrink=0.35, aspect=30, pad=0.03
-)
-cbar.set_label("Z-Axis Variable Magnitude (pu)", fontsize=13)
+# 1. Leave 5% empty space at the bottom of the page so subplots don't touch the colorbar
+plt.tight_layout(rect=[0, 0.05, 1, 1])
+# (If you are using fig.subplots_adjust instead of tight_layout, set bottom=0.06 there)
+
+# 2. Create a dedicated axis at the bottom: [left, bottom, width, height] in 0-to-1 page coordinates
+cbar_ax = fig.add_axes([0.30, 0.015, 0.40, 0.012])
+
+# 3. Render the colorbar into that exact bottom axis using `cax=`
+cbar = fig.colorbar(surf, cax=cbar_ax, orientation="horizontal")
+cbar.set_label("Z-Axis Variable Magnitude (pu)", fontsize=13, labelpad=6)
 
 plt.tight_layout(rect=[0, 0.04, 1, 1])
 plt.savefig(
-    "ACOPF_3D_manifolds_6C3.pdf",
+    "ACOPF_3D_manifolds_with_shadows_6C3.pdf",
     format="pdf",
     dpi=300,
     bbox_inches="tight",
