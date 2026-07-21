@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 import numpy as np
 
 # ==========================================
@@ -17,8 +18,8 @@ alpha1, alpha2 = np.meshgrid(alpha_vals, alpha_vals)
 alpha3 = 0.0  # Reference slack bus angle
 
 # 2. Forward AC Power Flow Equations (Calibrated to Figure 2.3 boundaries)
-# Active power at Bus 1 (X-axis): oscillates around -1.0 pu, fitting cleanly inside [0, -2.0]
-P1 = 0.98 * np.sin(alpha1 - alpha2) + 0.98 * np.sin(alpha1 - alpha3) - 1.0
+# Active power at Bus 1 (X-axis): oscillates around 0.0 pu, fitting cleanly inside [0, -2.0]
+P1 = 0.98 * np.sin(alpha1 - alpha2) + 0.98 * np.sin(alpha1 - alpha3) + 0.0
 
 # Active power at Bus 2 (Z-axis): oscillates around 0.0 pu, fitting inside [-2.0, 2.0]
 P2 = 0.98 * np.sin(alpha2 - alpha1) + 0.98 * np.sin(alpha2 - alpha3)
@@ -31,7 +32,7 @@ Q2 = (
 )
 
 # 3. Spatial Slicing: Removing half the surface along the P1 mid-plane to reveal inner folds
-mask = P1 > -1.0
+mask = P1 > 0.0
 
 P1_cut = np.where(mask, np.nan, P1)
 Q2_cut = np.where(mask, np.nan, Q2)
@@ -48,13 +49,20 @@ surf = ax.plot_surface(
     Q2_cut,
     P2_cut,
     cmap="jet",
-    edgecolor=(0, 0, 0, 0.25),  # Soft translucent edges for clean fold visibility
-    linewidth=0.2,
-    alpha=0.92,
+    edgecolor=(0, 0, 0, 0.15),  # (0, 0, 0, 0.25)
+    linewidth=0.65,
+    alpha=0.9,
     antialiased=True,
-    rstride=4,
-    cstride=4,
+    rstride=3,
+    cstride=1,
 )
+
+ax.plot_wireframe(
+    P1_cut, Q2_cut, P2_cut,
+    color="k", linewidth=0.35, alpha=0.15,
+    rstride=6, cstride=3,   # increase these numbers for a sparser grid, decrease for denser
+)
+
 # --- Plot 2D Wall Shadow Projections ---
 # 1. Shadow on the left wall (Y = -1.0): shows the figure-8 loops in the (P_G1, P_G2) plane
 ax.plot_wireframe(
@@ -62,7 +70,7 @@ ax.plot_wireframe(
     np.full_like(P1_cut, -1.0),
     P2_cut,
     color="k",
-    linewidth=0.15,
+    linewidth=0.35,
     alpha=0.3,
     rstride=8,
     cstride=8,
@@ -74,7 +82,7 @@ ax.plot_wireframe(
     Q2_cut,
     P2_cut,
     color="k",
-    linewidth=0.15,
+    linewidth=0.35,
     alpha=0.3,
     rstride=8,
     cstride=8,
@@ -82,26 +90,49 @@ ax.plot_wireframe(
 
 # 5. Exact Axis Ranges Matching Figure 2.3
 
-ax.set_xlim(0, -2.0)
+ax.set_xlim(-2.0, 0)
 ax.set_ylim(-1.0, 4.0)
 ax.set_zlim(-2.0, 2.0)
 
-ax.set_xlabel("$P_{G1}$ (pu)", fontsize=12, labelpad=14)
-ax.set_ylabel("$Q_{G2}$ (pu)", fontsize=12, labelpad=14)
-ax.set_zlabel("$P_{G2}$ (pu)", fontsize=12, labelpad=14)
+# Custom formatter: removes '.0' from integers while keeping '.5' for decimal steps
+def clean_ticks(x, pos):
+    if abs(x - round(x)) < 1e-5:  # Checks if the number is a whole integer
+        return f"{int(round(x))}"  # Returns 0, -1, -2 (stripping decimal and -0)
+    return f"{x:.1f}"  # Returns -0.5, -1.5
 
-ax.set_title(
-    "Figure 2.3: Feasible Space ($P_{G1} - Q_{G2} - P_{G2}$ View)\n(Exact Replication with Proper Calibration Staying Below Q_G2 = 4.0)",
-    fontsize=13,
-    pad=20,
-)
+# Apply 0.5 step spacing and clean integer formatting to all axes
+for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
+    axis.set_major_locator(ticker.MultipleLocator(0.5))
+    axis.set_major_formatter(ticker.FuncFormatter(clean_ticks))
+ax.yaxis.set_major_locator(ticker.MultipleLocator(1.0))
+ax.yaxis.set_major_formatter(ticker.FuncFormatter(clean_ticks))    
+ax.set_xlabel("$P_{G1}$ (pu)", fontsize=16, labelpad=14)
+ax.set_ylabel("$Q_{G2}$ (pu)", fontsize=16, labelpad=14)
+ax.set_zlabel("$P_{G2}$ (pu)", fontsize=16, labelpad=8)
+
+
+# ax.set_title(
+#     "ACOPF Feasible Space of the 3-Bus System",
+#     fontsize=13,
+#     pad=1,
+# )
 
 # Set camera angle to display P_G1 on the right foreground and Q_G2 on the left foreground
-ax.view_init(elev=22, azim=135)
+ax.view_init(elev=22, azim=40)
+
+# ax.invert_xaxis()
+# ax.invert_yaxis()
 
 # Add colorbar representing generation level at Bus 2
 cbar = fig.colorbar(surf, ax=ax, shrink=0.55, aspect=14, pad=0.08)
 cbar.set_label("$P_{G2}$ Active Power Level (pu)", fontsize=11)
 
 plt.tight_layout()
+plt.savefig(
+    "ACOPF_feasible_space.pdf",
+    format="pdf",
+    dpi=600,             # High resolution for any rasterized fallback elements
+    bbox_inches="tight", # Automatically trims empty white margins around the 3D box
+    pad_inches=0.5       # Adds a small, clean safety margin around the edges
+)
 plt.show()
